@@ -1,9 +1,11 @@
-let frontend
+let frontend = []
 
 if (process.env.FRONTEND) {
-    frontend = process.env.FRONTEND
+    for (address of process.env.FRONTEND.split(',')) {
+        frontend.push(address)
+    }
 } else {
-    frontend = 'http://localhost:3000'
+    frontend.push('http://localhost:3000')
 }
 
 module.exports = frontend
