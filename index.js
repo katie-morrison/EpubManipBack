@@ -633,6 +633,10 @@ app.get('/getEpub/:id', (request, response) => {
     })
 })
 
+app.get('/', (request, response) => {
+    response.send(`Hello world, were expecting stuff from ${frontend}`)
+})
+
 const PORT = 3001
 app.listen(PORT, () => {
     console.log(`Server running on PORT ${PORT}`)
