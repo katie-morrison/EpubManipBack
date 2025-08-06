@@ -659,7 +659,7 @@ app.get('/getEpub/:id', (request, response) => {
 })
 
 app.get('/', (request, response) => {
-    response.send(`Oh no, weve ruined everything!`)
+    response.send(`Hello world, were expecting stuff from ${frontend}`)
 })
 
 startServer()
