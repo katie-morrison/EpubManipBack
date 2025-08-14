@@ -1,21 +1,36 @@
 on:
   pull_request:
   push:
-      branches: [main]
+      branches: [main, development]
 
 jobs:
-  ci:
+  ci_dev:
     runs-on: ubuntu-latest
+    environment: Development
+    if: github.ref == 'refs/heads/development'
     steps:
       - uses: actions/checkout@v3
       - name: Test
         run: |
           npm install
           npm test
-
       - name: Deploy
-        if: github.ref == 'refs/heads/main'
         env:
-          deploy_url: ${{ secrets.RENDER_DEPLOY_HOOK_URL_PROD }}
+          deploy_url: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+        run: |
+          curl "$deploy_url"
+  ci_prod:
+    runs-on: ubuntu-latest
+    environment: Production
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v3
+      - name: Test
+        run: |
+          npm install
+          npm test
+      - name: Deploy
+        env:
+          deploy_url: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
         run: |
           curl "$deploy_url"
