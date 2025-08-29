@@ -456,11 +456,10 @@ function cleanFileOptions(fileOptions) {
 /**
  * Deletes files and directories used in the process of creating the final epub.
  * @function cleanUploads
- * @param {String} ePubDir A string representing he name of the epub in uploads, and folder in output to be deleted.
  * @param {Array<String>} names An array of strings representing the names of files to be removed from the uploads directory.
  * @returns {Promise<void>}
  */
-async function cleanUploads(ePubDir, names) {
+async function cleanUploads(names) {
     for (let name of names) {
         const filePath = path.join(__dirname, 'uploads', name)
         try {
@@ -473,6 +472,16 @@ async function cleanUploads(ePubDir, names) {
             console.error(`Error deleting file: ${name}`)
         }
     }
+    
+}
+
+/**
+ * Deletes files and directories used in the process of creating the final epub.
+ * @function cleanOutput
+ * @param {String} ePubDir A string representing the folder in output to be deleted.
+ * @returns {Promise<void>}
+ */
+async function cleanOutput(ePubDir) {
     const filePath = path.join(__dirname, 'output', ePubDir)
     try {
         fs.rm(filePath, {recursive: true, force: true}).then(() => {
@@ -555,7 +564,8 @@ app.post('/uploads', upload.array('myFiles', 100), async (request, response) => 
             await generateTOCNCX(ePubDir, fileList)
             await updateOPF(ePubDir, fileList, fileOptions.outputName)
             await generateEpub(ePubDir)
-            cleanUploads(ePubDir, names)
+            cleanUploads(names)
+            cleanOutput(ePubDir)
             response.send(ePubDir)
         } else {
             response.status(400).send('No files uploaded. None of the received files were of type epub')
@@ -607,6 +617,7 @@ app.post('/calculateDiagnostics', upload.array('myFile', 1), async (request, res
                     }
                 })
             }).then(() => {
+                cleanUploads([files[0].filename])
                 response.send(fileNames)
             }).catch(error => {
                 console.error('Error reading file:', error)
