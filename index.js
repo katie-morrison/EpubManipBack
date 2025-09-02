@@ -7,6 +7,8 @@ const JSZip = require('jszip')
 const epubZip = require('epub-zip')
 const frontend = require('./config/frontend')
 
+const ff = require('./util/file-functions')
+
 const app = express()
 const storage = multer.diskStorage({
     destination: function(req, file, cb) {
@@ -27,21 +29,6 @@ async function generateEpubDirectory(ePubDir) {
 }
 
 /**
- * Takes a string in directory/filename.extension format and returns filename.
- * @function isolateFileName
- * @param {String} name A string representing the full file path.
- * @returns {String}
- */
-function isolateFileName(name) {
-    const start = name.lastIndexOf('/') + 1
-    let end = name.lastIndexOf('.')
-    if (end === -1) {
-        end = name.length
-    }
-    return name.slice(start, end)
-}
-
-/**
  * Pulls the files out of an epub, manipulates them if necessary, then saves them to a folder in the uploads directory.
  * Also update fileList with the names of each file saved.
  * @function populateEpubDirectory
@@ -59,32 +46,25 @@ async function populateEpubDirectory(ePubDir, fileName, fileOptions, fileList) {
         await zip.loadAsync(data).then(async epub => {
             for (let prop of Object.getOwnPropertyNames(epub.files)) {
                 const file = epub.files[prop]
-                let filePath = path.join(__dirname, 'output', ePubDir, file.name)
-                if (file.dir) {
-                    if (!(await checkFileExists(filePath))) {
-                        await fs.mkdir(filePath).catch(error => {
-                            console.error(error)
-                        })
-                    }
-                } else {
-                    let finalName = file.name
+                if (!file.dir) {
+                    const fileParts = ff.splitFileName(file.name)
+                    let [dir, finalName, ext] = [fileParts.dir, fileParts.name, fileParts.ext]
+                    let filePath = path.join(__dirname, 'output', ePubDir, dir)
                     let isBody = false
                     let isBeforeChapters = false
                     let isIncludedXHTML = false
                     let descriptor = 'Default descriptor'
-                    const ext = getFileExtension(file.name)
                     if (ext === '.xhtml') {
-                        const isolated = isolateFileName(file.name)
-                        const nonChapterEntry = nonChapterXHTMLIncludes(fileOptions, isolated)
+                        const nonChapterEntry = nonChapterXHTMLIncludes(fileOptions, finalName)
                         if (nonChapterEntry) {
                             isBeforeChapters = nonChapterEntry.isBeforeChapters
                             isIncludedXHTML = true
                             descriptor = nonChapterEntry.descriptor
                         } else {
                             for (let bodyName of fileOptions.chapterFormat) {
-                                if (isolated.includes(bodyName)) {
-                                    finalName = updateFileName(finalName, `${bodyName}${fileOptions.bodyInd}`)
-                                    filePath = path.join(__dirname, 'output', ePubDir, finalName)
+                                if (finalName.includes(bodyName.format)) {
+                                    finalName = `${bodyName.format}${fileOptions.bodyInd}`
+                                    filePath = path.join(__dirname, 'output', ePubDir, dir)
                                     fileOptions['bodyInd']++
                                     isBody = true
                                     isIncludedXHTML = true
@@ -94,33 +74,35 @@ async function populateEpubDirectory(ePubDir, fileName, fileOptions, fileList) {
                         }
                     }
                     if (ext !== '.ncx' && !(ext === '.xhtml' && !isIncludedXHTML)) {
-                        if (!(await checkFileExists(filePath))) {
-                        let type
-                        if (['.png', '.jpg', '.jpeg'].includes(ext)) {
-                            type = 'nodebuffer'
-                        } else {
-                            type = 'text'
+                        if (!(await ff.checkPathExists(filePath))) {
+                            await ff.generateDirectory(filePath)
                         }
-                        let prom = zip.file(file.name).async(type).then(async data => {
-                            if (ext === '.xhtml') {
-                                data = processEpubFile(data, fileOptions.replacements)
+                        filePath = path.join(filePath, `${finalName}${ext}`)
+                        if (!(await ff.checkPathExists(filePath))) {
+                            let type
+                            if (['.png', '.jpg', '.jpeg'].includes(ext)) {
+                                type = 'nodebuffer'
+                            } else {
+                                type = 'text'
                             }
-                            const name = isolateFileName(finalName)
-                            const dir = getFileDirectory(finalName)
-                            await fs.writeFile(filePath, data).then(() => {
-                                fileList.push({
-                                    name: name,
-                                    dir: dir,
-                                    ext: ext,
-                                    isBody: isBody,
-                                    isBeforeChapters: isBeforeChapters,
-                                    descriptor: descriptor
+                            let prom = zip.file(file.name).async(type).then(async data => {
+                                if (ext === '.xhtml') {
+                                    data = processEpubFile(data, fileOptions.replacements)
+                                }
+                                await fs.writeFile(filePath, data).then(() => {
+                                    fileList.push({
+                                        name: finalName,
+                                        dir: dir,
+                                        ext: ext,
+                                        isBody: isBody,
+                                        isBeforeChapters: isBeforeChapters,
+                                        descriptor: descriptor
+                                    })
+                                }).catch(error => {
+                                    console.error(error)
                                 })
-                            }).catch(error => {
-                                console.error(error)
                             })
-                        })
-                        promises.push(prom)
+                            promises.push(prom)
                         }
                     }
                 }
@@ -149,63 +131,6 @@ function nonChapterXHTMLIncludes(fileOptions, isolated) {
         }
     }
     return false
-}
-
-/**
- * Checks if a file exists at the path given.
- * @function checkFileExists
- * @param {*} path A string representing the full path to a file.
- * @returns {Promise<boolean>}
- */
-async function checkFileExists(path) {
-    try {
-        await fs.access(path)
-    } catch(error) {
-        if(error.code ==='ENOENT') {
-            return false
-        }
-    }
-    return true
-
-}
-
-/**
- * Takes a path string and changes the file name.
- * @function updateFileName
- * @param {String} originalName A path string in the format directory/name.extension.
- * @param {String} newName A string representing the new file name to be used.
- * @returns {String} A path string with the directory structure and file type of originalName, but the filename of newName.
- */
-function updateFileName(originalName, newName) {
-    const end1 = originalName.lastIndexOf('/') + 1
-    const start2 = originalName.lastIndexOf('.')
-    return `${originalName.slice(0, end1)}${newName}${originalName.slice(start2, originalName.length)}`
-
-}
-
-/**
- * Returns the extension of a file.
- * @function getFileExtension
- * @param {String} name A string representing a file name.
- * @returns {String} The file's extension, if it has one, including the dot. e.g. getFileExtension('test.txt') will return '.txt'
- */
-function getFileExtension(name) {
-    const start = name.lastIndexOf('.')
-    if (start === -1) {
-        return ''
-    }
-    return name.slice(start, name.length)
-}
-
-/**
- * Returns the directory path of a file.
- * @function getFileDirectory
- * @param {String} name A string representing a file name.
- * @returns {String} A string containing the files directory path.
- */
-function getFileDirectory(name) {
-    const end = name.lastIndexOf('/') + 1
-    return name.slice(0, end)
 }
 
 /**
@@ -466,6 +391,10 @@ function processEpubFile(data, replacements) {
  * @param {Array<Object>} fileList An array of objects representing files pulled from the uploaded epubs.
  */
 function establishFileOrder(fileList) {
+    fileList.sort((a,b) => {
+        return a.name.localeCompare(b.name)
+    })
+
     let beforeChapters = 0
     let chapters = 0
     let beforeCount = 0
@@ -500,14 +429,7 @@ function establishFileOrder(fileList) {
             file.chapterNumber = -1
         }
     }
-}
 
-/**
- * Sorts the fileList by desired order of appearance.
- * @function sortFileList
- * @param {Array<Object>} fileList An array of objects representing files pulled from the uploaded epubs.
- */
-function sortFileList(fileList) {
     fileList.sort((a,b) => {
         return a.order - b.order
     })
@@ -534,11 +456,10 @@ function cleanFileOptions(fileOptions) {
 /**
  * Deletes files and directories used in the process of creating the final epub.
  * @function cleanUploads
- * @param {String} ePubDir A string representing he name of the epub in uploads, and folder in output to be deleted.
  * @param {Array<String>} names An array of strings representing the names of files to be removed from the uploads directory.
  * @returns {Promise<void>}
  */
-async function cleanUploads(ePubDir, names) {
+async function cleanUploads(names) {
     for (let name of names) {
         const filePath = path.join(__dirname, 'uploads', name)
         try {
@@ -551,6 +472,16 @@ async function cleanUploads(ePubDir, names) {
             console.error(`Error deleting file: ${name}`)
         }
     }
+    
+}
+
+/**
+ * Deletes files and directories used in the process of creating the final epub.
+ * @function cleanOutput
+ * @param {String} ePubDir A string representing the folder in output to be deleted.
+ * @returns {Promise<void>}
+ */
+async function cleanOutput(ePubDir) {
     const filePath = path.join(__dirname, 'output', ePubDir)
     try {
         fs.rm(filePath, {recursive: true, force: true}).then(() => {
@@ -614,12 +545,11 @@ app.use(cors({
 app.post('/uploads', upload.array('myFiles', 100), async (request, response) => {
     if (request.files && request.files.length > 0) {
         const files = request.files.filter(file => {
-            return getFileExtension(file.filename) === '.epub'
+            return ff.splitFileName(file.filename).ext === '.epub'
         })
         if (files.length > 0) {
             const fileOptions = JSON.parse(request.body['fileOptions'])
             cleanFileOptions(fileOptions)
-            console.log(fileOptions)
             fileOptions['bodyInd'] = 0
             const ePubDir = files[0].filename
             const names = []
@@ -630,12 +560,12 @@ app.post('/uploads', upload.array('myFiles', 100), async (request, response) => 
                 await populateEpubDirectory(ePubDir, file.filename, fileOptions, fileList)
             }
             establishFileOrder(fileList)
-            sortFileList(fileList)
             await generateTOCXHTML(ePubDir, fileList)
             await generateTOCNCX(ePubDir, fileList)
             await updateOPF(ePubDir, fileList, fileOptions.outputName)
             await generateEpub(ePubDir)
-            cleanUploads(ePubDir, names)
+            cleanUploads(names)
+            cleanOutput(ePubDir)
             response.send(ePubDir)
         } else {
             response.status(400).send('No files uploaded. None of the received files were of type epub')
@@ -656,6 +586,49 @@ app.get('/getEpub/:id', (request, response) => {
             cleanFinished(request.params.id)
         }
     })
+})
+
+app.get('/getDemoEpubs', (request, response) => {
+    const filePath = path.join(__dirname, 'demo', 'Demo_Epubs.zip')
+    response.sendFile(filePath, error => {
+        if (error) {
+            console.error('Error sending demo files')
+            response.status(500).send('Error sending demo files')
+        }
+    })
+})
+
+app.post('/calculateDiagnostics', upload.array('myFile', 1), async (request, response) => {
+    if (request.files && request.files.length > 0) {
+        const files = request.files.filter(file => {
+            return ff.splitFileName(file.filename).ext ==='.epub'
+        })
+        if (files.length > 0) {
+            const fileNames = []
+            const epubPath = path.join(__dirname, 'uploads', files[0].filename)
+            await fs.readFile(epubPath).then(async data => {
+                const zip = new JSZip()
+                await zip.loadAsync(data).then(async epub => {
+                    for (let prop of Object.getOwnPropertyNames(epub.files)) {
+                        const file = epub.files[prop]
+                        if (!file.dir) {
+                            fileNames.push(file.name)
+                        }
+                    }
+                })
+            }).then(() => {
+                cleanUploads([files[0].filename])
+                response.send(fileNames)
+            }).catch(error => {
+                console.error('Error reading file:', error)
+            })
+
+        } else {
+            response.status(400).send('No files uploaded. None of the received files were of type epub')
+        }
+    } else {
+        response.status(400).send('No files uploaded')
+    }
 })
 
 app.get('/', (request, response) => {
