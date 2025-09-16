@@ -73,6 +73,21 @@ async function populateEpubDirectory(ePubDir, fileName, fileOptions, fileList) {
                             }
                         }
                     }
+                    if (ext === '.opf' || ext === '.ncx') {
+                        const dotless = ext.replace('.', '')
+                        let tempPath = path.join(__dirname, 'output', ePubDir, '_tempmanip_')
+                        if (!(await ff.checkPathExists(tempPath))) {
+                            await ff.generateDirectory(tempPath)
+                        }
+                        tempPath = path.join(tempPath, `${finalName}${fileOptions['fileInds'][dotless]}${ext}`)
+                        let prom = zip.file(file.name).async('text').then(async data => {
+                            await fs.writeFile(tempPath, data).then(() => {
+                                //Add opf data to list in fileoptions
+                            })
+                        })
+                        promises.push(prom)
+                        fileOptions['fileInds'][dotless]++
+                    }
                     if (ext !== '.ncx' && !(ext === '.xhtml' && !isIncludedXHTML)) {
                         if (!(await ff.checkPathExists(filePath))) {
                             await ff.generateDirectory(filePath)
@@ -530,6 +545,16 @@ async function cleanTempFolders() {
     }
 }
 
+async function removeTempManip(ePubDir) {
+    try {
+        await fs.rm(path.join(__dirname, 'output', ePubDir, '_tempmanip_'), {recursive: true, force: true})
+    } catch (error) {
+        console.error(`Error deleting _tempmanip_ folder in ${ePubDir}`)
+    }
+    
+
+}
+
 async function startServer() {
     await cleanTempFolders()
     const PORT = 3001
@@ -551,6 +576,7 @@ app.post('/uploads', upload.array('myFiles', 100), async (request, response) => 
             const fileOptions = JSON.parse(request.body['fileOptions'])
             cleanFileOptions(fileOptions)
             fileOptions['bodyInd'] = 0
+            fileOptions['fileInds'] = {'body': 0, 'opf': 0, 'ncx': 0}
             const ePubDir = files[0].filename
             const names = []
             const fileList = []
@@ -563,9 +589,10 @@ app.post('/uploads', upload.array('myFiles', 100), async (request, response) => 
             await generateTOCXHTML(ePubDir, fileList)
             await generateTOCNCX(ePubDir, fileList)
             await updateOPF(ePubDir, fileList, fileOptions.outputName)
+            await removeTempManip(ePubDir)
             await generateEpub(ePubDir)
-            cleanUploads(names)
-            cleanOutput(ePubDir)
+            // cleanUploads(names)
+            // cleanOutput(ePubDir)
             response.send(ePubDir)
         } else {
             response.status(400).send('No files uploaded. None of the received files were of type epub')
@@ -583,7 +610,7 @@ app.get('/getEpub/:id', (request, response) => {
             console.error(`Error sending file: ${error}`)
             response.status(500).send('Error sending file')
         } else {
-            cleanFinished(request.params.id)
+            // cleanFinished(request.params.id)
         }
     })
 })
