@@ -8,9 +8,11 @@ describe('splitFileName', () => {
         expect(out).toStrictEqual({dir:exDir, name: exName, ext: exExt})
     })
 
-    it('throws error if passed a .', () => {
+    it('returns all blanks if passed a .', () => {
         const inp = '.'
-        expect(() => ff.splitFileName(inp)).toThrow('Invalid file name: .')
+        const [exDir, exName, exExt] = ['', '', '']
+        const out = ff.splitFileName(inp)
+        expect(out).toStrictEqual({dir:exDir, name: exName, ext: exExt})
     })
 
     it('returns full input as directoryif passed a /', () => {

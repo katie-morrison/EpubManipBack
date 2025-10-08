@@ -30,75 +30,109 @@ async function generateEpubDirectory(ePubDir) {
 
 /**
  * Pulls the files out of an epub, manipulates them if necessary, then saves them to a folder in the uploads directory.
- * Also update fileList with the names of each file saved.
  * @function populateEpubDirectory
  * @param {String} ePubDir A string representing the name of the folder to put epub files into.
  * @param {String} fileName A string representing the name of the specific epub file to disassemble.
  * @param {Object} fileOptions An object with settings for handling specific files.
- * @param {Array<Object>} fileList A list of objects representing files added to the folder.
  * @returns {Promise<void>}
  */
-async function populateEpubDirectory(ePubDir, fileName, fileOptions, fileList) {
+async function populateEpubDirectory(ePubDir, fileName, fileOptions) {
     const epubPath = path.join(__dirname, 'uploads', fileName)
     const promises = []
     await fs.readFile(epubPath).then(async data => {
         const zip = new JSZip()
         await zip.loadAsync(data).then(async epub => {
             for (let prop of Object.getOwnPropertyNames(epub.files)) {
-                const file = epub.files[prop]
-                if (!file.dir) {
-                    const fileParts = ff.splitFileName(file.name)
+                const subFile = epub.files[prop]
+                if (!subFile.dir) {
+                    const fileParts = ff.splitFileName(subFile.name)
                     let [dir, finalName, ext] = [fileParts.dir, fileParts.name, fileParts.ext]
-                    let filePath = path.join(__dirname, 'output', ePubDir, dir)
-                    let isBody = false
-                    let isBeforeChapters = false
-                    let isIncludedXHTML = false
-                    let descriptor = 'Default descriptor'
+                    let fullDir = path.join(__dirname, 'output', ePubDir, dir)
+                    let isChapter = false
+                    let filesToWrite = []
+                    let ignoreWrite = false
                     if (ext === '.xhtml') {
-                        const nonChapterEntry = nonChapterXHTMLIncludes(fileOptions, finalName)
-                        if (nonChapterEntry) {
-                            isBeforeChapters = nonChapterEntry.isBeforeChapters
-                            isIncludedXHTML = true
-                            descriptor = nonChapterEntry.descriptor
-                        } else {
-                            for (let bodyName of fileOptions.chapterFormat) {
-                                if (finalName.includes(bodyName.format)) {
-                                    finalName = `${bodyName.format}${fileOptions.bodyInd}`
-                                    filePath = path.join(__dirname, 'output', ePubDir, dir)
-                                    fileOptions['bodyInd']++
-                                    isBody = true
-                                    isIncludedXHTML = true
+                        let isNavigation = false
+                        for (let navTitle of fileOptions['xhtmlNav']) {
+                            if (finalName === navTitle.format) {
+                                isNavigation = true
+                                let finalContents = false
+                                if (!fileOptions['uniqueFileLocs']['xhtml']) {
+                                    fileOptions['uniqueFileLocs']['xhtml'] = path.join(fullDir, `${finalName}${ext}`)
+                                    finalContents = true
+                                } else {
+                                    ignoreWrite = true
+                                }
+                                let tempPath = path.join(__dirname, 'output', ePubDir, '_tempmanip_')
+                                filesToWrite.push({
+                                    fullDir: tempPath,
+                                    fullName: `${finalName}${fileOptions['fileInds']['xhtml']}${ext}`,
+                                    prepend: `<meta:EpubManip copyOfFinal="${finalContents}">${fileName}</meta>\n`
+                                })
+                                fileOptions['fileInds']['xhtml']++
+                                break
+                            }
+                        }
+                        if (!isNavigation) {
+                            let isExclusion = false
+                            for (let file of fileOptions['nonChapterXHTML']) {
+                                if (finalName === file.fileName) {
+                                    finalName = `exclusion${file.id}`
+                                    isExclusion = true
                                     break
                                 }
                             }
+                            if (!isExclusion) {
+                                for (let chapterName of fileOptions['chapterFormat']) {
+                                    if (finalName.includes(chapterName.format)) {
+                                        isChapter = true
+                                        finalName = `${chapterName.format}${fileOptions.bodyInd}`
+                                        fullDir = path.join(__dirname, 'output', ePubDir, dir)
+                                        fileOptions['bodyInd']++
+                                        fileOptions['renameHistory'][`${fileParts.name}${fileName}`] = finalName
+                                        break
+                                    }
+                                }
+                            }
                         }
+                        if (!ignoreWrite) {
+                            filesToWrite.push({fullDir: fullDir, fullName: `${finalName}${ext}`, prepend: ''})
+                        }
+                    } else if (ext === '.opf' || ext === '.ncx') {
+                        const dotless = ext.replace('.', '')
+                        if (!fileOptions['uniqueFileLocs'][dotless]) {
+                            fileOptions['uniqueFileLocs'][dotless] = path.join(fullDir, `${finalName}${ext}`)
+                            filesToWrite.push({fullDir: fullDir, fullName: `${finalName}${ext}`, prepend: ''})
+                        }
+                        let tempPath = path.join(__dirname, 'output', ePubDir, '_tempmanip_')
+                        filesToWrite.push({
+                            fullDir: tempPath,
+                            fullName: `${finalName}${fileOptions['fileInds'][dotless]}${ext}`,
+                            prepend: `<meta:EpubManip>${fileName}</meta>\n`
+                        })
+                        fileOptions['fileInds'][dotless]++
+                    } else {
+                        filesToWrite.push({fullDir: fullDir, fullName: `${finalName}${ext}`, prepend: ''})
                     }
-                    if (ext !== '.ncx' && !(ext === '.xhtml' && !isIncludedXHTML)) {
-                        if (!(await ff.checkPathExists(filePath))) {
-                            await ff.generateDirectory(filePath)
+                    for (let file of filesToWrite) {
+                        if (!(await ff.checkPathExists(file.fullDir))) {
+                            await ff.generateDirectory(file.fullDir)
                         }
-                        filePath = path.join(filePath, `${finalName}${ext}`)
-                        if (!(await ff.checkPathExists(filePath))) {
+                        if (!(await ff.checkPathExists(path.join(file.fullDir, file.fullName)))) {
                             let type
                             if (['.png', '.jpg', '.jpeg'].includes(ext)) {
                                 type = 'nodebuffer'
                             } else {
                                 type = 'text'
                             }
-                            let prom = zip.file(file.name).async(type).then(async data => {
-                                if (ext === '.xhtml') {
+                            let prom = zip.file(subFile.name).async(type).then(async data => {
+                                if (ext === '.xhtml' && isChapter) {
                                     data = processEpubFile(data, fileOptions.replacements)
                                 }
-                                await fs.writeFile(filePath, data).then(() => {
-                                    fileList.push({
-                                        name: finalName,
-                                        dir: dir,
-                                        ext: ext,
-                                        isBody: isBody,
-                                        isBeforeChapters: isBeforeChapters,
-                                        descriptor: descriptor
-                                    })
-                                }).catch(error => {
+                                if (type === 'text') {
+                                    data = `${file.prepend}${data}`
+                                }
+                                await fs.writeFile(path.join(file.fullDir, file.fullName), data).catch(error => {
                                     console.error(error)
                                 })
                             })
@@ -116,211 +150,367 @@ async function populateEpubDirectory(ePubDir, fileName, fileOptions, fileList) {
     })
 }
 
-/**
- * Checks fileOptions to see if the named file should be handled differently from a normal chapter.
- * Returns the object containing settings for that file if a match is found, otherwise returns false
- * @function nonChapterXHTMLIncludes
- * @param {Object} fileOptions An object with settings for handling specific files.
- * @param {String} isolated A string representing a file name.
- * @returns {(Object|boolean)}
- */
-function nonChapterXHTMLIncludes(fileOptions, isolated) {
-    for (let entry of fileOptions.nonChapterXHTML) {
-        if (entry.format === isolated) {
-            return entry
-        }
-    }
-    return false
-}
-
-/**
- * Generates a 'contents.xhtml' file for the epub being created.
- * @function generateTOCXHTML
- * @param {String} ePubDir A string representing the name of the folder to pull epub files from.
- * @param {Array<Object>} fileList An array of objects representing the files added to a given epub folder.
- * @returns {Promise<void>}
- */
-async function generateTOCXHTML(ePubDir, fileList){
-    try {
-        const lineArr = []
-        const data = await fs.readFile(path.join(__dirname, 'templates', 'contents.xhtml'), {encoding: 'utf8'})
-        const lines = data.split(/\r?\n/)
-        let firstChapter = undefined
-        for (let line of lines) {
-            let ind = line.indexOf('TOCLIST1')
-            if (ind !== -1) {
-                for (let file of fileList) {
-                    if (file.order !== -1) {
-                        if (file.chapterNumber !== -1) {
-                            if (firstChapter === undefined) {
-                                firstChapter = file
-                            }
-                            lineArr.push(`\t<li><a href="${file.name}${file.ext}">CHAPTER ${file.chapterNumber}</a></li>`)
-                        } else {
-                            lineArr.push(`\t<li><a href="${file.name}${file.ext}">${file.descriptor}</a></li>`)
-                        }
-                    }
-                }
-            } else {
-                ind = line.indexOf('TOCLIST2')
-                if (ind !== -1) {
-                    lineArr.push(`\t\t<li><a epub:type="bodymatter" href="${firstChapter.name}${firstChapter.ext}">Start of Content</a></li>`)
-                } else {
-                    lineArr.push(line)
-                }
-            }
-        }
-        const filePath = path.join(__dirname, 'output', ePubDir, firstChapter.dir, 'contents.xhtml')
-        await fs.writeFile(filePath, lineArr.join('\n'))
-        fileList.push({
-            name: 'contents',
-            dir: firstChapter.dir,
-            ext: '.xhtml',
-            isBody: false,
-            isBeforeChapters: false,
-            descriptor: 'Default descriptor',
-            order: -1,
-            chapterNumber: -1
-        })
-    } catch (error) {
-        console.error(error)
-    }
-}
-
-/**
- * Generates a 'toc.ncx' file for the epub being created.
- * @function generateTOCNCX
- * @param {String} ePubDir A string representing the name of the folder to pull epub files from.
- * @param {Array<Object>} fileList An array of objects representing the files added to a given epub folder.
- * @returns {Promise<void>}
- */
-async function generateTOCNCX(ePubDir, fileList){
-    try {
-        const lineArr = []
-        const data = await fs.readFile(path.join(__dirname, 'templates', 'toc.ncx'), {encoding: 'utf8'})
-        const lines = data.split(/\r?\n/)
-        let firstChapter = undefined
-        for (let line of lines) {
-            let ind = line.indexOf('TOCLIST')
-            if (ind !== -1) {
-                for (let file of fileList) {
-                    if (file.order !== -1) {
-                        lineArr.push(`\t<navPoint id="navPoint-${file.order}" playOrder="${file.order}">`)
-                        lineArr.push('\t\t<navLabel>')
-                        if (file.chapterNumber !== -1) {
-                            if (firstChapter === undefined) {
-                                firstChapter = file
-                            }
-                            lineArr.push(`\t\t\t<text>Chapter ${file.chapterNumber}</text>`)
-                        } else {
-                            lineArr.push(`\t\t\t<text>${file.descriptor}</text>`)
-                        }
-                        lineArr.push('\t\t</navLabel>')
-                        lineArr.push(`\t\t<content src="${file.name}${file.ext}"/>`)
-                        lineArr.push('\t</navPoint>')
-                    }
-                }
-            } else {
-                lineArr.push(line)
-            }
-        }
-        await fs.writeFile(path.join(__dirname, 'output', ePubDir, firstChapter.dir, 'toc.ncx'), lineArr.join('\n'))
-        fileList.push({
-            name: 'toc',
-            dir: firstChapter.dir,
-            ext: '.ncx',
-            isBody: false,
-            isBeforeChapters: false,
-            descriptor: 'Default descriptor',
-            order: -1,
-            chapterNumber: -1
-        })
-    } catch (error) {
-        console.error(error)
-    }
-}
-
-/**
- * Updates the .opf file pulled from the initial epub.
- * @function updateOPF
- * @param {String} ePubDir A string representing the name of the folder to pull epub files from.
- * @param {Array<Object>} fileList An array of objects representing the files added to a given epub folder.
- * @param {String} title A string representing the title of the epub.
- * @returns {Promise<void>}
- */
-async function updateOPF(ePubDir, fileList, title){
-    try {
-        const lineArr = []
-        let inManifest = false
-        let inSpine = false
-        let opf = undefined
-        for (let file of fileList) {
-            if (file.ext === '.opf') {
-                opf = file
+async function combineUniqueFiles(ePubDir, fileOptions) {
+    const dir = path.join(__dirname, 'output', ePubDir, '_tempmanip_')
+    const files = await fs.readdir(dir)
+    for (let file of files) {
+        const ext = ff.splitFileName(file).ext
+        switch (ext) {
+            case '.ncx':
+                await harvestNCXData(path.join(dir, file), fileOptions)
                 break
-            }
+            case '.opf':
+                await harvestOPFData(path.join(dir, file), fileOptions)
+                break
+            case '.xhtml':
+                await harvestContentsData(path.join(dir, file), fileOptions)
+                break
+            default:
+                console.error(`Unexpected file extension ${ext} encountered`)
         }
-        const data = await fs.readFile(path.join(__dirname, 'output', ePubDir, opf.dir, opf.name + opf.ext), {encoding: 'utf8'})
-        const lines = data.split(/\r?\n/)
-        for (let line of lines) {
-            let ind = line.indexOf('<manifest')
-            if (ind !== -1) {
-                inManifest = true
-                lineArr.push(line)
-                for (let file of fileList) {
-                    if (file.ext === '.ncx') {
-                        lineArr.push(`\t\t<item id="ncx" href="${file.dir.replace(opf.dir, '')}${file.name}${file.ext}" media-type="application/x-dtbncx+xml" fallback="contents"/>`)
-                    } else if (file.ext === '.xhtml') {
-                        if (file.name === 'contents') {
-                            lineArr.push(`\t\t<item id="contents" properties="nav" href="${file.dir.replace(opf.dir, '')}${file.name}${file.ext}" media-type="application/xhtml+xml"/>`)
-                        } else {
-                            lineArr.push(`\t\t<item id="${file.name}" href="${file.dir.replace(opf.dir, '')}${file.name}${file.ext}" media-type="application/xhtml+xml"/>`)
+    }
+    //TODO: ensure opfNCXLine fallback and opfContentsLine id are the same value
+}
+
+async function harvestNCXData(filePath, fileOptions) {
+    try {
+        const data = await fs.readFile(filePath, {encoding: 'utf8'})
+        let remaining = ''
+        const parentRegex = /^(<meta:EpubManip>)(.*?)(<\/meta>.*)/s
+        const parentFile = parentRegex.exec(data)[2]
+        const navPointRegex = /(.*?)(<navPoint.*?<\/navPoint>)(.*)/s
+        const navPointIdRegex = /(.*id=")(.*?)(".*)/s
+        const navPointPlayOrderRegex = /(.*playOrder=")(.*?)(".*)/s
+        const navPointSrcRegex = /(.*src=")(.*?)(\..*)/s
+        let parsedForNavPoint = navPointRegex.exec(data)
+        while (parsedForNavPoint) {
+            let inNavXHTMLNode = false
+            let isExclusion = false
+            let ignoreWrite = false
+            let exclusionName = ''
+            remaining = parsedForNavPoint[3]
+            let navPoint = parsedForNavPoint[2]
+            let parsedForId = navPointIdRegex.exec(navPoint)
+            navPoint = `${parsedForId[1]}navPoint-${fileOptions['cumulativeData']['ncxInd']}${parsedForId[3]}`
+            let parsedForPlayOrder = navPointPlayOrderRegex.exec(navPoint)
+            navPoint = `${parsedForPlayOrder[1]}${fileOptions['cumulativeData']['ncxInd']}${parsedForPlayOrder[3]}`
+            let parsedForSrc = navPointSrcRegex.exec(navPoint)
+            if (parsedForSrc) {
+                let name = parsedForSrc[2]
+                let newName = name
+                for (let navTitle of fileOptions['xhtmlNav']) {
+                    if (navTitle.format === name) {
+                        let savedName = ff.splitFileName(fileOptions['uniqueFileLocs']['xhtml']).name
+                        inNavXHTMLNode = true
+                        if (savedName !== name) {
+                            ignoreWrite = true
                         }
-                    } else if (file.ext === '.png') {
-                        lineArr.push(`\t\t<item id="png-${file.name}" href="${file.dir.replace(opf.dir, '')}${file.name}${file.ext}" media-type="image/png"/>`)
-                    } else if (file.ext === '.css') {
-                        lineArr.push(`\t\t<item id="css-${file.name}" href="${file.dir.replace(opf.dir, '')}${file.name}${file.ext}" media-type="text/css"/>`)
-                    } else if (file.ext === '.jpeg') {
-                        lineArr.push(`\t\t<item id="jpeg-${file.name}" href="${file.dir.replace(opf.dir, '')}${file.name}${file.ext}" media-type="image/jpeg"/>`)
+                        break
+                    }
+                }
+                if (!inNavXHTMLNode) {
+                    for (let file of fileOptions['nonChapterXHTML']) {
+                        if (name === file.fileName) {
+                            newName = `exclusion${file.id}`
+                            isExclusion = true
+                            exclusionName = name
+                            break
+                        }
+                    }
+                    if (!isExclusion) {
+                        newName = fileOptions['renameHistory'][`${name}${parentFile}`]
+                        if(!newName) {
+                            newName = name
+                        }
+                    }
+                }
+                navPoint = `${parsedForSrc[1]}${newName}${parsedForSrc[3]}`
+            }
+            if (!ignoreWrite) {
+                if (inNavXHTMLNode) {
+                    if (fileOptions['cumulativeData']['ncxContentsBlock'].length === 0) {
+                        fileOptions['cumulativeData']['ncxContentsBlock'].push(navPoint)
+                        fileOptions['cumulativeData']['ncxInd']++
+                    }
+                } else if (isExclusion) {
+                    if (!fileOptions['cumulativeData']['ncxRecordedExclusions'][exclusionName]){
+                        fileOptions['cumulativeData']['ncxNavMap'].push(navPoint)
+                        fileOptions['cumulativeData']['ncxRecordedExclusions'][exclusionName] = true
+                        fileOptions['cumulativeData']['ncxInd']++
+                    }
+                } else {
+                    fileOptions['cumulativeData']['ncxNavMap'].push(navPoint)
+                    fileOptions['cumulativeData']['ncxInd']++
+                }
+            }
+            parsedForNavPoint = navPointRegex.exec(remaining)
+        }
+    } catch (error) {
+        console.error(error)
+    }
+}
+
+async function harvestOPFData(filePath, fileOptions) {
+    try {
+        const data = await fs.readFile(filePath, {encoding: 'utf8'})
+        let remaining = ''
+        const spineRefs = {}
+        const parentRegex = /^(<meta:EpubManip>)(.*?)(<\/meta>.*)/s
+        const parentFile = parentRegex.exec(data)[2]
+        const itemRegex = /(.*?)(<item .*?\/>)(.*)/s
+        const itemHrefRegex = /(.*href=")(.*?)(".*)/s
+        const itemIdRegex = /(.*id=")(.*?)(".*)/s
+        const itemRefRegex = /(.*?)(<itemref.*?\/>)(.*)/s
+        const itemRefIdRefRegex = /(.*idref=")(.*?)(".*)/s
+        let parsedForItem = itemRegex.exec(data)
+        while (parsedForItem) {
+            let inNavXHTMLNode = false
+            let isExclusion = false
+            let isNcxNode = false
+            let ignoreWrite = false
+            let isOther = false
+            let newName = ''
+            let exclusionName = ''
+            remaining = parsedForItem[3]
+            let item = parsedForItem[2]
+            let parsedForHref = itemHrefRegex.exec(item)
+            const fileParts = ff.splitFileName(parsedForHref[2])
+            let [dir, name, ext] = [fileParts.dir, fileParts.name, fileParts.ext]
+            if (ext === '.ncx') {
+                isNcxNode = true
+                if (fileOptions['cumulativeData']['opfNCXLine']) {
+                    ignoreWrite = true
+                }
+            } else if (ext === '.xhtml') {
+                for (let navTitle of fileOptions['xhtmlNav']) {
+                    if (navTitle.format === name) {
+                        let savedName = ff.splitFileName(fileOptions['uniqueFileLocs']['xhtml']).name
+                        inNavXHTMLNode = true
+                        if (savedName !== name) {
+                            ignoreWrite = true
+                        }
+                        break
+                    }
+                }
+                if (!inNavXHTMLNode) {
+                    for (let file of fileOptions['nonChapterXHTML']) {
+                        if (name === file.fileName) {
+                            newName = `exclusion${file.id}`
+                            isExclusion = true
+                            exclusionName = name
+                            break
+                        }
+                    }
+                    if (!isExclusion) {
+                        newName = fileOptions['renameHistory'][`${name}${parentFile}`]
                     }
                 }
             } else {
-                ind = line.indexOf('<spine')
-                if (ind !== -1) {
-                    inSpine = true
-                    lineArr.push(line)
-                    lineArr.push('\t\t<itemref idref="contents" linear="yes"/>')
-                    for (let file of fileList) {
-                        if (file.ext === '.xhtml' && file.name !== 'contents') {
-                            lineArr.push(`\t\t<itemref idref="${file.name}" linear="yes"/>`)
-                        }
+                isOther = true
+            }
+            item = `${parsedForHref[1]}${dir}${newName || name}${ext}${parsedForHref[3]}`
+            let parsedforId = itemIdRegex.exec(item)
+            const originalID = parsedforId[2]
+            const newID = newName || name
+            item = `${parsedforId[1]}${newID}${parsedforId[3]}`
+            if (!ignoreWrite) {
+                if (isNcxNode) {
+                    if (!fileOptions['cumulativeData']['opfNCXLine']) {
+                        fileOptions['cumulativeData']['opfNCXLine'] = item
+                    }
+                } else if (inNavXHTMLNode) {
+                    if (!fileOptions['cumulativeData']['opfContentsLine']) {
+                        fileOptions['cumulativeData']['opfContentsLine'] = item
+                        spineRefs[originalID] = newID
+                    }
+                } else if (isExclusion) {
+                    if (!fileOptions['cumulativeData']['opfRecordedExclusions'][exclusionName]) {
+                        fileOptions['cumulativeData']['opfManifestData'].push(item)
+                        fileOptions['cumulativeData']['opfRecordedExclusions'][exclusionName] = true
+                        spineRefs[originalID] = newID
                     }
                 } else {
-                    ind = line.indexOf('<reference')
-                    if (ind !== -1) {
-                        lineArr.push('\t\t<reference type="toc" title="Contents" href="contents.xhtml"/>')
-                    } else {
-                        ind = line.indexOf('<dc:title')
-                        if (ind !== -1) {
-                            lineArr.push(`\t\t<dc:title>${title}</dc:title>`)
-                        } else {
-                            ind = line.indexOf('</manifest>')
-                            if (ind !== -1) {
-                                inManifest = false
-                            }
-                            ind = line.indexOf('</spine')
-                            if (ind !== -1) {
-                                inSpine = false
-                            }
-                            if (!inManifest && !inSpine) {
-                                lineArr.push(line)
-                            }
+                    if (isOther) {
+                        if (!fileOptions['cumulativeData']['opfRecordedOthers'][`${name}${ext}`]) {
+                            fileOptions['cumulativeData']['opfManifestData'].push(item)
+                            fileOptions['cumulativeData']['opfRecordedOthers'][`${name}${ext}`] = true
                         }
+                    } else {
+                        fileOptions['cumulativeData']['opfManifestData'].push(item)
+                        spineRefs[originalID] = newID
                     }
                 }
             }
+            parsedForItem = itemRegex.exec(remaining)
         }
-        await fs.writeFile(path.join(__dirname, 'output', ePubDir, opf.dir, opf.name + opf.ext), lineArr.join('\n'))
+        let parsedForItemRef = itemRefRegex.exec(remaining)
+        while (parsedForItemRef) {
+            remaining = parsedForItemRef[3]
+            let item = parsedForItemRef[2]
+            let parsedForItemRefIdRef= itemRefIdRefRegex.exec(item)
+            let name = parsedForItemRefIdRef[2]
+            if (spineRefs[name]) {
+                fileOptions['cumulativeData']['opfSpineOther'].push(`${parsedForItemRefIdRef[1]}${spineRefs[name]}${parsedForItemRefIdRef[3]}`)
+            }
+            parsedForItemRef = itemRefRegex.exec(remaining)
+        }
+    } catch (error) {
+        console.error(error)
+    }
+}
+
+async function harvestContentsData(filePath, fileOptions) {
+    try {
+        const data = await fs.readFile(filePath, {encoding: 'utf8'})
+        let remaining = ''
+        const parentRegex = /^(<meta:EpubManip copyOfFinal=")(.*?)(">)(.*?)(<\/meta>.*)/s
+        const copyOfFinal = JSON.parse(parentRegex.exec(data)[2])
+        const parentFile = parentRegex.exec(data)[4]
+        const olRegex = /(.*?)(<ol>.*?<\/ol>)(.*)/s
+        const liRegex = /(.*?)(<li>.*?<\/li>)(.*)/s
+        const liHrefRegex = /(.*href=")(.*?)(\..*)/s
+        let parsedForOl = olRegex.exec(data)
+        const ol1 = parsedForOl[2]
+        let parsedForLi = liRegex.exec(ol1)
+        while (parsedForLi) {
+            let inNavXHTMLNode = false
+            let ignoreWrite = false
+            let isExclusion = false
+            let exclusionName = ''
+            let newName = ''
+            let item = parsedForLi[2]
+            remaining = parsedForLi[3]
+            let parsedForLiHref = liHrefRegex.exec(item)
+            let name = parsedForLiHref[2]
+            for (let navTitle of fileOptions['xhtmlNav']) {
+                if (navTitle.format === name) {
+                    let savedName = ff.splitFileName(fileOptions['uniqueFileLocs']['xhtml']).name
+                    inNavXHTMLNode = true
+                    if (savedName !== name) {
+                        ignoreWrite = true
+                    }
+                    break
+                }
+            }
+            if (!inNavXHTMLNode) {
+                for (let file of fileOptions['nonChapterXHTML']) {
+                    if (name === file.fileName) {
+                        newName = `exclusion${file.id}`
+                        isExclusion = true
+                        exclusionName = name
+                        break
+                    }
+                }
+                if (!isExclusion) {
+                    newName = fileOptions['renameHistory'][`${name}${parentFile}`]
+                }
+            }
+            item = `${parsedForLiHref[1]}${newName || name}${parsedForLiHref[3]}`
+            if (!ignoreWrite) {
+                if (isExclusion) {
+                    if (!fileOptions['cumulativeData']['contentsRecordedExclusions'][exclusionName]) {
+                        fileOptions['cumulativeData']['contentsOL1'].push(item)
+                        fileOptions['cumulativeData']['contentsRecordedExclusions'][exclusionName] = true
+                    }
+                } else {
+                    fileOptions['cumulativeData']['contentsOL1'].push(item)
+                }
+            }
+            parsedForLi = liRegex.exec(remaining)
+        }
+        if (copyOfFinal) {
+            parsedForOl = olRegex.exec(parsedForOl[3])
+            const ol2 = parsedForOl[2]
+            let parsedForLi = liRegex.exec(ol2)
+            while (parsedForLi) {
+                let item = parsedForLi[2]
+                remaining = parsedForLi[3]
+                let parsedForLiHref = liHrefRegex.exec(item)
+                if (parsedForLiHref) {
+                    let name = parsedForLiHref[2]
+                    let savedName = ff.splitFileName(fileOptions['uniqueFileLocs']['xhtml']).name
+                    if (name === savedName) {
+                        fileOptions['cumulativeData']['contentsOL2'].push(item)
+                    } else {
+                        let newName = fileOptions['renameHistory'][`${name}${parentFile}`]
+                        item = `${parsedForLiHref[1]}${newName || name}${parsedForLiHref[3]}`
+                        fileOptions['cumulativeData']['contentsOL2'].push(item)
+                    }
+                } else {
+                    fileOptions['cumulativeData']['contentsOL2'].push(item)
+                }
+                parsedForLi = liRegex.exec(remaining)
+            }
+        }     
+    } catch (error) {
+        console.error(error)
+    }
+}
+
+//TODO
+function attemptRename(fileName, parentFileName, fileOptions) {
+    let newName = fileOptions['renameHistory'][`${fileName}${parentFileName}`]
+    newName = newName || fileName
+    return newName
+}
+
+async function transplantCombinedFileData(fileOptions) {
+    await transplantOPFData(fileOptions)
+    if (fileOptions['uniqueFileLocs']['ncx']) {
+        await transplantNCXData(fileOptions)
+    }
+    if (fileOptions['uniqueFileLocs']['xhtml']) {
+        await transplantContentsData(fileOptions)
+    }
+}
+
+async function transplantOPFData(fileOptions) {
+    try {
+        let data = await fs.readFile(fileOptions['uniqueFileLocs']['opf'], {encoding: 'utf8'})
+        const manifestRegex = /(.*?<manifest>\s*)(.*?)(\s*<\/manifest>.*)/s
+        const spineRegex = /(.*?<spine.*?>\s*)(.*?)(\s*<\/spine>.*)/s
+        const parsedForManifest = manifestRegex.exec(data)
+        const manifestData = [
+            fileOptions['cumulativeData']['opfNCXLine'],
+            fileOptions['cumulativeData']['opfContentsLine'],
+            ...fileOptions['cumulativeData']['opfManifestData']
+        ].join('\n')
+        const parsedForSpine = spineRegex.exec(parsedForManifest[3])
+        const spineData = fileOptions['cumulativeData']['opfSpineOther'].join('\n')
+
+        data = `${parsedForManifest[1]}${manifestData}${parsedForSpine[1]}${spineData}${parsedForSpine[3]}`
+        await fs.writeFile(fileOptions['uniqueFileLocs']['opf'], data)
+    } catch (error) {
+        console.error(error)
+    }
+}
+
+async function transplantNCXData(fileOptions) {
+    try {
+        let data = await fs.readFile(fileOptions['uniqueFileLocs']['ncx'], {encoding: 'utf8'})
+        const navMapRegex = /(.*?<navMap>\s*)(.*?)(\s*<\/navMap>.*)/s
+        const parsedForNavMap = navMapRegex.exec(data)
+        const navMapData = [
+            ...fileOptions['cumulativeData']['ncxContentsBlock'],
+            ...fileOptions['cumulativeData']['ncxNavMap']
+        ].join('\n')
+        data = `${parsedForNavMap[1]}${navMapData}${parsedForNavMap[3]}`
+        await fs.writeFile(fileOptions['uniqueFileLocs']['ncx'], data)
+    } catch (error) {
+        console.error(error)
+    }
+}
+
+async function transplantContentsData(fileOptions) {
+    try {
+        let data = await fs.readFile(fileOptions['uniqueFileLocs']['xhtml'], {encoding: 'utf8'})
+        const olRegex = /(.*?<ol>\s*)(.*?)(\s*<\/ol>.*)/s
+        const parsedForFirstOL = olRegex.exec(data)
+        const ol1Data = fileOptions['cumulativeData']['contentsOL1'].join('\n')
+        const parsedForSecondOL = olRegex.exec(parsedForFirstOL[3])
+        const ol2Data = fileOptions['cumulativeData']['contentsOL2'].join('\n')
+        data = `${parsedForFirstOL[1]}${ol1Data}${parsedForSecondOL[1]}${ol2Data}${parsedForSecondOL[3]}`
+        await fs.writeFile(fileOptions['uniqueFileLocs']['xhtml'], data)
     } catch (error) {
         console.error(error)
     }
@@ -355,84 +545,14 @@ function processEpubFile(data, replacements) {
     if (replacements.length === 0) {
         return data
     }
-    const processed = []
-    let inBody = false
-    const lines = data.split(/\r?\n/)
 
-    for (let line of lines) {
-        let ind = line.indexOf('<body')
-        if (ind !== -1) {
-            processed.push(line)
-            inBody = true
-        } else {
-            ind = line.indexOf('</body')
-            if (ind !== -1) {
-                processed.push(line)
-                inBody = false
-            } else {
-                if (inBody) {
-                    for (let replacement of replacements) {
-                        line = line.replaceAll(replacement.before, replacement.after)
-                    }
-                    processed.push(line)
-                } else {
-                    processed.push(line)
-                }
-            }
-        }
+    const bodyRegex = /(.*?<body>\s*)(.*?)(\s*<\/body>.*)/s
+    const parsedForBody = bodyRegex.exec(data)
+    let processed = parsedForBody[2]
+    for (let replacement of replacements) {
+        processed = processed.replaceAll(replacement.before, replacement.after)
     }
-    return processed.join('\n')
-}
-
-/**
- * Establishes the order files should be added to the table of contents.
- * This is primarily for ensuring all the chapters are together, and all titles, forewards, etc. are clumped before the chapters, while all afterwords, etc. are clumped after the chapters.
- * @function establishFileOrder
- * @param {Array<Object>} fileList An array of objects representing files pulled from the uploaded epubs.
- */
-function establishFileOrder(fileList) {
-    fileList.sort((a,b) => {
-        return a.name.localeCompare(b.name)
-    })
-
-    let beforeChapters = 0
-    let chapters = 0
-    let beforeCount = 0
-    let chapterCount = 0
-    let afterCount = 0
-    for (let file of fileList) {
-        if (file.ext === '.xhtml') {
-            if (file.isBody) {
-                chapters++
-            } else if (file.isBeforeChapters) {
-                beforeChapters++
-            }
-        }
-    }
-    for (let file of fileList) {
-        if (file.ext === '.xhtml') {
-            if (file.isBody) {
-                file.order = beforeChapters + chapterCount + 1
-                file.chapterNumber = chapterCount + 1
-                chapterCount++
-            } else if (file.isBeforeChapters) {
-                file.order = beforeCount + 1
-                file.chapterNumber = -1
-                beforeCount++
-            } else {
-                file.order = beforeChapters + chapters + afterCount + 1
-                file.chapterNumber = -1
-                afterCount++
-            }
-        } else {
-            file.order = -1
-            file.chapterNumber = -1
-        }
-    }
-
-    fileList.sort((a,b) => {
-        return a.order - b.order
-    })
+    return `${parsedForBody[1]}${processed}${parsedForBody[3]}`
 }
 
 /**
@@ -530,6 +650,16 @@ async function cleanTempFolders() {
     }
 }
 
+async function removeTempManip(ePubDir) {
+    try {
+        await fs.rm(path.join(__dirname, 'output', ePubDir, '_tempmanip_'), {recursive: true, force: true})
+    } catch (error) {
+        console.error(`Error deleting _tempmanip_ folder in ${ePubDir}`)
+    }
+    
+
+}
+
 async function startServer() {
     await cleanTempFolders()
     const PORT = 3001
@@ -551,18 +681,36 @@ app.post('/uploads', upload.array('myFiles', 100), async (request, response) => 
             const fileOptions = JSON.parse(request.body['fileOptions'])
             cleanFileOptions(fileOptions)
             fileOptions['bodyInd'] = 0
+            fileOptions['fileInds'] = {'xhtml': 0, 'opf': 0, 'ncx': 0}
+            fileOptions['renameHistory'] = {}
+            fileOptions['cumulativeData'] = {
+                'ncxInd': 1,
+                'ncxContentsBlock': [],
+                'ncxNavMap': [],
+                'ncxRecordedExclusions': {},
+                'opfNCXLine': '',
+                'opfContentsLine': '',
+                'opfRecordedExclusions': {},
+                'opfRecordedOthers': {},
+                'opfManifestData': [],
+                'opfSpineContents': '',
+                'opfSpineOther': [],
+                'opfSpineOtherExistingIds': {},
+                'contentsRecordedExclusions': {},
+                'contentsOL1': [],
+                'contentsOL2': []
+            }
+            fileOptions['uniqueFileLocs'] = {'opf': '', 'ncx': '', 'xhtml': ''}
             const ePubDir = files[0].filename
             const names = []
-            const fileList = []
             await generateEpubDirectory(ePubDir)
             for (let file of files) {
                 names.push(file.filename)
-                await populateEpubDirectory(ePubDir, file.filename, fileOptions, fileList)
+                await populateEpubDirectory(ePubDir, file.filename, fileOptions)
             }
-            establishFileOrder(fileList)
-            await generateTOCXHTML(ePubDir, fileList)
-            await generateTOCNCX(ePubDir, fileList)
-            await updateOPF(ePubDir, fileList, fileOptions.outputName)
+            await combineUniqueFiles(ePubDir, fileOptions)
+            await transplantCombinedFileData(fileOptions)
+            await removeTempManip(ePubDir)
             await generateEpub(ePubDir)
             cleanUploads(names)
             cleanOutput(ePubDir)

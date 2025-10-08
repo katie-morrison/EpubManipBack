@@ -1,29 +1,23 @@
 const fs = require('fs/promises')
 
 function splitFileName(fileName) {
-    if (fileName === '.') {
-        throw new Error(`Invalid file name: ${fileName}`)
-    }
-
-    let dir, name, ext
-    const splitDir = /^(.*[\\/])?(.*)?$/
-    const dirMatch = splitDir.exec(fileName)
-    if (dirMatch[1]) {
-        dir = dirMatch[1]
-    } else {
-        dir = ''
-    }
-    if(dirMatch[2]) {
-        name = dirMatch[2]
-        lastDot = name.lastIndexOf('.')
-        if (lastDot === -1 || lastDot === 0) {
-            ext = ''
+    const dirRegex = /(.*[\\\/])*([^\\\/]*)/
+    const dotRegex = /(.*)(\.)([^\.]*)/
+    let [dir, name, ext] = ['', '', '']
+    let parsedForDir = dirRegex.exec(fileName)
+    dir = parsedForDir[1] ? parsedForDir[1] : ''
+    let parsedForDot = dotRegex.exec(parsedForDir[2])
+    if (parsedForDot) {
+        if (parsedForDot[1]) {
+            name = parsedForDot[1]
+            ext = `.${parsedForDot[3]}`
         } else {
-            ext = name.slice(lastDot, name.length)
-            name = name.slice(0, lastDot)
+            if (parsedForDot[3]) {
+                name = `.${parsedForDot[3]}`
+            }
         }
     } else {
-        [name, ext] = ['', '']
+        name = parsedForDir[2]
     }
 
     return {dir: dir, name: name, ext: ext}
