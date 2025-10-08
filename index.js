@@ -30,7 +30,6 @@ async function generateEpubDirectory(ePubDir) {
 
 /**
  * Pulls the files out of an epub, manipulates them if necessary, then saves them to a folder in the uploads directory.
- * Also update fileList with the names of each file saved.
  * @function populateEpubDirectory
  * @param {String} ePubDir A string representing the name of the folder to put epub files into.
  * @param {String} fileName A string representing the name of the specific epub file to disassemble.
@@ -706,7 +705,6 @@ app.post('/uploads', upload.array('myFiles', 100), async (request, response) => 
             fileOptions['uniqueFileLocs'] = {'opf': '', 'ncx': '', 'xhtml': ''}
             const ePubDir = files[0].filename
             const names = []
-            const fileList = []
             await generateEpubDirectory(ePubDir)
             for (let file of files) {
                 names.push(file.filename)
@@ -714,11 +712,10 @@ app.post('/uploads', upload.array('myFiles', 100), async (request, response) => 
             }
             await combineUniqueFiles(ePubDir, fileOptions)
             await transplantCombinedFileData(fileOptions)
-            // await removeTempManip(ePubDir)
-            console.log(fileOptions)
+            await removeTempManip(ePubDir)
             await generateEpub(ePubDir)
-            // cleanUploads(names)
-            // cleanOutput(ePubDir)
+            cleanUploads(names)
+            cleanOutput(ePubDir)
             response.send(ePubDir)
         } else {
             response.status(400).send('No files uploaded. None of the received files were of type epub')
@@ -736,7 +733,7 @@ app.get('/getEpub/:id', (request, response) => {
             console.error(`Error sending file: ${error}`)
             response.status(500).send('Error sending file')
         } else {
-            // cleanFinished(request.params.id)
+            cleanFinished(request.params.id)
         }
     })
 })
