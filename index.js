@@ -343,12 +343,10 @@ async function harvestOPFData(filePath, fileOptions) {
             }
             parsedForItem = itemRegex.exec(remaining)
         }
-        console.log('Spinerefs: ', spineRefs)
         let parsedForItemRef = itemRefRegex.exec(remaining)
         while (parsedForItemRef) {
             remaining = parsedForItemRef[3]
             let item = parsedForItemRef[2]
-            console.log(item)
             let parsedForItemRefIdRef= itemRefIdRefRegex.exec(item)
             let name = parsedForItemRefIdRef[2]
             if (spineRefs[name]) {
