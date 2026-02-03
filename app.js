@@ -10,22 +10,22 @@ const frontend = require('./config/frontend')
 const ff = require('./util/file-functions')
 
 const app = express()
-const storage = multer.diskStorage({
-    destination: function(req, file, cb) {
-        cb(null, './uploads')
-    },
-    filename: function(req, file, cb) {
-        cb(null, Date.now() + '-' + file.originalname.replaceAll(' ', '_'))
-    }
-})
+const storage = multer.memoryStorage()
 const upload = multer({storage: storage})
 
-async function generateEpubDirectory(ePubDir) {
+async function generateSubFolders(ePubDir) {
     fs.mkdir(path.join(__dirname, 'output', ePubDir), error => {
         if (error) {
             console.error(error)
         }
     })
+
+    fs.mkdir(path.join(__dirname, 'uploads', ePubDir), error => {
+        if (error) {
+            console.error(error)
+        }
+    })
+
 }
 
 /**
@@ -37,7 +37,7 @@ async function generateEpubDirectory(ePubDir) {
  * @returns {Promise<void>}
  */
 async function populateEpubDirectory(ePubDir, fileName, fileOptions) {
-    const epubPath = path.join(__dirname, 'uploads', fileName)
+    const epubPath = path.join(__dirname, 'uploads', ePubDir, fileName)
     const promises = []
     await fs.readFile(epubPath).then(async data => {
         const zip = new JSZip()
@@ -688,20 +688,22 @@ async function cleanUploads(names) {
 
 /**
  * Deletes files and directories used in the process of creating the final epub.
- * @function cleanOutput
+ * @function cleanSubFolders
  * @param {String} ePubDir A string representing the folder in output to be deleted.
  * @returns {Promise<void>}
  */
-async function cleanOutput(ePubDir) {
-    const filePath = path.join(__dirname, 'output', ePubDir)
-    try {
-        fs.rm(filePath, {recursive: true, force: true}).then(() => {
-            console.log(`Directory ${filePath} deleted successfully`)
-        }).catch(error => {
-            console.error(error)
-        })     
-    } catch (error) {
-        console.error(`Error deleting directory: ${filePath}`)
+async function cleanSubFolders(ePubDir) {
+    const filePaths = [path.join(__dirname, 'output', ePubDir), path.join(__dirname, 'uploads', ePubDir)]
+    for (let filePath of filePaths) {
+        try {
+            fs.rm(filePath, {recursive: true, force: true}).then(() => {
+                console.log(`Directory ${filePath} deleted successfully!`)
+            }).catch(error => {
+                console.error(error)
+            })
+        } catch (error) {
+            console.error(`Error deleting directory: ${filePath}!`)
+        }
     }
 }
 
@@ -734,6 +736,35 @@ async function removeTempManip(ePubDir) {
 
 }
 
+function generateFileOptions(fileOptionsJSON) {
+    const fileOptions = JSON.parse(fileOptionsJSON)
+    cleanFileOptions(fileOptions)
+    fileOptions['bodyInd'] = 0
+    fileOptions['fileInds'] = {'xhtml': 0, 'opf': 0, 'ncx': 0}
+    fileOptions['renameHistory'] = {}
+    fileOptions['cumulativeData'] = {
+        'ncxInd': 1,
+        'ncxContentsBlock': [],
+        'ncxNavMap': [],
+        'ncxRecordedExclusions': {},
+        'opfNCXLine': '',
+        'opfContentsLine': '',
+        'opfRecordedExclusions': {},
+        'opfRecordedOthers': {},
+        'opfManifestData': [],
+        'opfSpineContents': '',
+        'opfSpineOther': [],
+        'opfSpineOtherExistingIds': {},
+        'opfReference': [],
+        'contentsRecordedExclusions': {},
+        'contentsOL1': [],
+        'contentsOL2': []
+    }
+    fileOptions['uniqueFileLocs'] = {'opf': '', 'ncx': '', 'xhtml': '', 'xml': ''}
+    fileOptions['fileDirs'] = {}
+    return fileOptions
+}
+
 app.use(cors({
     origin: frontend
 }))
@@ -741,49 +772,29 @@ app.use(cors({
 app.post('/uploads', upload.array('myFiles', 100), async (request, response) => {
     if (request.files && request.files.length > 0) {
         const files = request.files.filter(file => {
-            return ff.splitFileName(file.filename).ext === '.epub'
+            return ff.splitFileName(file.originalname).ext === '.epub'
         })
+        const uploadTime = Date.now();
+        for (let file of files) {
+            file.filename = uploadTime + '-' + file.originalname.replaceAll(' ', '_')
+        }
         if (files.length > 0) {
-            const fileOptions = JSON.parse(request.body['fileOptions'])
-            cleanFileOptions(fileOptions)
-            fileOptions['bodyInd'] = 0
-            fileOptions['fileInds'] = {'xhtml': 0, 'opf': 0, 'ncx': 0}
-            fileOptions['renameHistory'] = {}
-            fileOptions['cumulativeData'] = {
-                'ncxInd': 1,
-                'ncxContentsBlock': [],
-                'ncxNavMap': [],
-                'ncxRecordedExclusions': {},
-                'opfNCXLine': '',
-                'opfContentsLine': '',
-                'opfRecordedExclusions': {},
-                'opfRecordedOthers': {},
-                'opfManifestData': [],
-                'opfSpineContents': '',
-                'opfSpineOther': [],
-                'opfSpineOtherExistingIds': {},
-                'opfReference': [],
-                'contentsRecordedExclusions': {},
-                'contentsOL1': [],
-                'contentsOL2': []
-            }
-            fileOptions['uniqueFileLocs'] = {'opf': '', 'ncx': '', 'xhtml': '', 'xml': ''}
-            fileOptions['fileDirs'] = {}
             const ePubDir = files[0].filename
-            const names = []
-            await generateEpubDirectory(ePubDir)
+            await generateSubFolders(ePubDir)
+            const fileOptions = generateFileOptions(request.body['fileOptions'])
             for (let file of files) {
-                names.push(file.filename)
+                await fs.writeFile(path.join(__dirname, 'uploads', ePubDir, file.filename), file.buffer).catch(error => {
+                    console.error(error)
+                })
                 await populateEpubDirectory(ePubDir, file.filename, fileOptions)
             }
-            await combineUniqueFiles(ePubDir, fileOptions)
-            await transplantCombinedFileData(fileOptions)
-            await updateContainerXML(fileOptions)
-            console.log(fileOptions)
-            // await removeTempManip(ePubDir)
-            await generateEpub(ePubDir)
-            // cleanUploads(names)
-            // cleanOutput(ePubDir)
+            // await combineUniqueFiles(ePubDir, fileOptions)
+            // await transplantCombinedFileData(fileOptions)
+            // await updateContainerXML(fileOptions)
+            // // console.log(fileOptions)
+            // // await removeTempManip(ePubDir)
+            // await generateEpub(ePubDir)
+            // // cleanSubFolders(ePubDir)
             response.send(ePubDir)
         } else {
             response.status(400).send('No files uploaded. None of the received files were of type epub')
