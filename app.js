@@ -13,6 +13,19 @@ const app = express()
 const storage = multer.memoryStorage()
 const upload = multer({storage: storage})
 
+const CONTAINER_NAME = 'EpubManipGenerated'
+const EXCLUSION_RENAME = 'exclusion'
+const CHAPTER_RENAME = 'chapter'
+const OTHER_RENAME = 'other'
+
+const FileType = Object.freeze({
+    NAVIGATION: 'NAVIGATION',
+    CHAPTER: 'CHAPTER',
+    EXCLUSION: 'EXCLUSION',
+    IGNORE: 'IGNORE',
+    OTHER: 'OTHER'
+})
+
 async function generateSubFolders(ePubDir) {
     fs.mkdir(path.join(__dirname, 'output', ePubDir), error => {
         if (error) {
@@ -31,150 +44,86 @@ async function generateSubFolders(ePubDir) {
 /**
  * Pulls the files out of an epub, manipulates them if necessary, then saves them to a folder in the uploads directory.
  * @function populateEpubDirectory
- * @param {String} ePubDir A string representing the name of the folder to put epub files into.
- * @param {String} fileName A string representing the name of the specific epub file to disassemble.
  * @param {Object} fileOptions An object with settings for handling specific files.
+ * @param {String} ePubDir A string representing the name of the folder to put epub files into.
+ * @param {String} ePubName A string representing the name of the specific epub file to disassemble.
  * @returns {Promise<void>}
  */
-async function populateEpubDirectory(ePubDir, fileName, fileOptions) {
-    const epubPath = path.join(__dirname, 'uploads', ePubDir, fileName)
-    const promises = []
-    await fs.readFile(epubPath).then(async data => {
+async function populateEpubDirectory(fileOptions, ePubDir, ePubName) {
+    const filePath = path.join(__dirname, 'uploads', ePubDir, ePubName)
+    const writeTo = path.join(__dirname, 'output', ePubDir)
+    await fs.readFile(filePath).then(async data => {
         const zip = new JSZip()
         await zip.loadAsync(data).then(async epub => {
             for (let prop of Object.getOwnPropertyNames(epub.files)) {
                 const subFile = epub.files[prop]
                 if (!subFile.dir) {
-                    const fileParts = ff.splitFileName(subFile.name)
-                    let [pathTo, finalName, ext] = [fileParts.dir, fileParts.name, fileParts.ext]
-                    let newDir = pathTo
-                    const metaINFRegex = /META-INF[\/\\]/
-                    if (pathTo && !metaINFRegex.test(pathTo)) {
-                        newDir = path.join('OPS', pathTo)
-                    }
-                    let recordDir = true
-                    if (finalName === 'mimetype' || (pathTo && metaINFRegex.test(pathTo))) {
-                        recordDir = false
-                    }
-                    let isChapter = false
-                    let filesToWrite = []
-                    let ignoreWrite = false
-                    if (ext === '.xhtml') {
-                        let isNavigation = false
-                        for (let navTitle of fileOptions['xhtmlNav']) {
-                            if (finalName === navTitle.format) {
-                                isNavigation = true
-                                let copyOfFinal = false
-                                if (!fileOptions['uniqueFileLocs']['xhtml']) {
-                                    newDir = 'OPS'
-                                    pathTo = ''
-                                    fileOptions['uniqueFileLocs']['xhtml'] = path.join(__dirname, 'output', ePubDir, 'OPS', `${finalName}${ext}`)
-                                    copyOfFinal = true
-                                } else {
-                                    ignoreWrite = true
-                                }
-                                let tempPath = '_tempmanip_'
-                                filesToWrite.push({
-                                    dir: tempPath,
-                                    fullName: `${finalName}${fileOptions['fileInds']['xhtml']}${ext}`,
-                                    prepend: `<meta:EpubManip copyOfFinal="${copyOfFinal}">${fileName}</meta>\n`,
-                                    recordDir: false
-                                })
-                                fileOptions['fileInds']['xhtml']++
-                                break
-                            }
+                    let parts = path.parse(subFile.name)
+                    let [pathFromEpubRoot, fileName, ext] = [parts.dir, parts.name, parts.ext]
+                    let relativePath = path.join(pathFromEpubRoot, fileName + ext)
+                    let pathPrepend = CONTAINER_NAME
+                    let finalPath = path.join((ff.getTopLevelFolder(subFile.name) === CONTAINER_NAME ? '' : pathPrepend), pathFromEpubRoot)
+                    let type = fileOptions.getFileType(fileName)
+                    if (ext === '.ncx' || ext === '.opf' || (ext === '.xhtml' && type === FileType.NAVIGATION)) {
+                        let firstInstance = false
+                        if (!fileOptions['uniqueFileLocs'][ext]) {
+                            fileOptions['uniqueFileLocs'][ext] = path.join(pathPrepend, fileName + ext)
+                            firstInstance = true
                         }
-                        if (!isNavigation) {
-                            let isExclusion = false
-                            for (let file of fileOptions['nonChapterXHTML']) {
-                                if (finalName === file.fileName) {
-                                    finalName = `exclusion${file.id}`
-                                    isExclusion = true
-                                    break
-                                }
-                            }
-                            if (!isExclusion) {
-                                for (let chapterName of fileOptions['chapterFormat']) {
-                                    if (finalName.includes(chapterName.format)) {
-                                        isChapter = true
-                                        finalName = `${chapterName.format}${fileOptions.bodyInd}`
-                                        fileOptions['bodyInd']++
-                                        fileOptions['renameHistory'][`${fileParts.name}${fileName}`] = finalName
-                                        break
-                                    }
-                                }
-                            }
+                        let tempLoc = path.join(writeTo, '_tempmanip_')
+                        if (!(await ff.checkPathExists(tempLoc))) {
+                            await ff.generateDirectory(tempLoc)
                         }
-                        if (!ignoreWrite) {
-                            filesToWrite.push({dir: newDir, fullName: `${finalName}${ext}`, prepend: '', recordDir: true})
-                        }
-                    } else if (ext === '.opf' || ext === '.ncx') {
-                        const dotless = ext.replace('.', '')
-                        let copyOfFinal = false
-                        if (!fileOptions['uniqueFileLocs'][dotless]) {
-                            newDir = 'OPS'
-                            pathTo = ''
-                            fileOptions['uniqueFileLocs'][dotless] = path.join(__dirname, 'output', ePubDir, 'OPS', `${finalName}${ext}`)
-                            filesToWrite.push({dir: newDir, fullName: `${finalName}${ext}`, prepend: '', recordDir: true})
-                            copyOfFinal = true
-                        }
-                        let tempPath = '_tempmanip_'
-                        filesToWrite.push({
-                            dir: tempPath,
-                            fullName: `${finalName}${fileOptions['fileInds'][dotless]}${ext}`,
-                            prepend: `<meta:EpubManip copyOfFinal="${copyOfFinal}">${fileName}</meta>\n`,
-                            recordDir: false
+                        let tempInd = fileOptions['tempInds'][ext]
+                        await zip.file(subFile.name).async('text').then(async data => {
+                            data = `<meta:EpubManip copyOfFinal="${firstInstance}">${ePubName}</meta>\n${data}`
+                            await fs.writeFile(path.join(tempLoc, fileName + tempInd + ext), data).catch(error => {
+                                console.error(error)
+                            })
                         })
-                        fileOptions['fileInds'][dotless]++
-                    } else if (`${finalName}${ext}` === 'container.xml') {
-                        if (!fileOptions['uniqueFileLocs']['xml']) {
-                            fileOptions['uniqueFileLocs']['xml'] = path.join(__dirname, 'output', ePubDir, pathTo, `${finalName}${ext}`)
-                            filesToWrite.push({dir: newDir, fullName: `${finalName}${ext}`, prepend: '', recordDir: recordDir})
+                        fileOptions['tempInds'][ext] = tempInd + 1
+                        relativePath = path.join(pathPrepend, fileName + ext)
+                    } else if ((fileName === 'mimetype'&& ext === '') || pathFromEpubRoot === 'META-INF') {
+                        relativePath = path.join(pathFromEpubRoot, fileName + ext)
+                    } else if (ext === ".xhtml") {
+                        if (type === FileType.EXCLUSION || type === FileType.CHAPTER || type === FileType.OTHER) {
+                            let newName = fileOptions.generateNewName(fileName, ePubName, type)['newName']
+                            relativePath = path.join(finalPath, newName + ext)
+                        } else {
+                            continue
                         }
                     } else {
-                        filesToWrite.push({dir: newDir, fullName: `${finalName}${ext}`, prepend: '', recordDir: recordDir})
+                        relativePath = path.join(finalPath, fileName + ext)
                     }
-                    for (let file of filesToWrite) {
-                        let fullDir = path.join(__dirname, 'output', ePubDir, file.dir)
-                        if (!(await ff.checkPathExists(fullDir))) {
-                            await ff.generateDirectory(fullDir)
-                        }
-                        if (!(await ff.checkPathExists(path.join(fullDir, file.fullName)))) {
-                            if (file.recordDir) {
-                                fileOptions['fileDirs'][file.fullName] = `${pathTo}${file.fullName}`
-                            }
-                            let type
-                            if (['.png', '.jpg', '.jpeg'].includes(ext)) {
-                                type = 'nodebuffer'
-                            } else {
-                                type = 'text'
-                            }
-                            let prom = zip.file(subFile.name).async(type).then(async data => {
-                                if (ext === '.xhtml') {
-                                    data = fixXHTMLLinks(data, fileOptions)
-                                    if (isChapter) {
-                                        data = processEpubFile(data, fileOptions)
-                                    }
-                                }
-                                if (type === 'text') {
-                                    data = `${file.prepend}${data}`
-                                }
-                                await fs.writeFile(path.join(fullDir, file.fullName), data).catch(error => {
-                                    console.error(error)
-                                })
-                            })
-                            promises.push(prom)
-                        }
-                    }
+                    await extractAndRecordFile(fileOptions, zip, subFile.name, writeTo, relativePath)
                 }
             }
         })
     }).catch(error => {
         console.error('Error reading file:', error)
     })
-    return Promise.allSettled(promises).then(() => {
-        // console.log(`Directory ${ePubDir} built!`)
-    })
+}
+
+async function extractAndRecordFile(fileOptions, zip, fileName, writeTo, relativePath) {
+    let downloadPath = path.join(writeTo, relativePath)
+    let parts = path.parse(downloadPath)
+    let type
+    if (['.png', '.jpg', '.jpeg'].includes(parts.ext)) {
+        type = 'nodebuffer'
+    } else {
+        type = 'text'
+    }
+    fileOptions['fileLocs'][parts.base] = relativePath
+    if (!(await ff.checkPathExists(downloadPath))) {
+        if (!(await ff.checkPathExists(parts.dir))) {
+            await ff.generateDirectory(parts.dir)
+        }
+        await zip.file(fileName).async(type).then(async data => {
+            await fs.writeFile(downloadPath, data).catch(error => {
+                console.error(error)
+            })
+        })
+    }
 }
 
 async function combineUniqueFiles(ePubDir, fileOptions) {
@@ -742,6 +691,16 @@ function generateFileOptions(fileOptionsJSON) {
     fileOptions['bodyInd'] = 0
     fileOptions['fileInds'] = {'xhtml': 0, 'opf': 0, 'ncx': 0}
     fileOptions['renameHistory'] = {}
+    fileOptions['replacementData'] = {
+        'renameInds': {
+            'chaptersInd': 1,
+            'othersInd': 1,
+            'exclusionsInd': 1,
+            },
+        'chapters': [],
+        'others': [],
+        'exclusions': {}
+    }
     fileOptions['cumulativeData'] = {
         'ncxInd': 1,
         'ncxContentsBlock': [],
@@ -760,8 +719,106 @@ function generateFileOptions(fileOptionsJSON) {
         'contentsOL1': [],
         'contentsOL2': []
     }
-    fileOptions['uniqueFileLocs'] = {'opf': '', 'ncx': '', 'xhtml': '', 'xml': ''}
-    fileOptions['fileDirs'] = {}
+    fileOptions['tempInds'] = {'.opf': 0, '.ncx': 0, '.xhtml': 0}
+    fileOptions['uniqueFileLocs'] = {'.opf': '', '.ncx': '', '.xhtml': '', 'xml': ''}
+    fileOptions['fileLocs'] = {}
+    fileOptions['hasIgnore'] = function(name) {
+        for (let file of this.ignoreFile) {
+            if (file.fileName === name) {
+                return true
+            }
+        }
+        return false;
+    }
+    fileOptions['hasNav'] = function(name) {
+        for (let file of this.xhtmlNav) {
+            if (file.format === name) {
+                return true
+            }
+        }
+        return false
+    }
+    fileOptions['hasNonChapterXHTML'] = function(name) {
+        for (let file of this.nonChapterXHTML) {
+            if (file.fileName === name) {
+                return true
+            }
+        }
+        return false
+    }
+    fileOptions['hasChapterFormat'] = function(name) {
+        name = name.replaceAll(/[0-9]/gi, '')
+        for (let file of this.chapterFormat) {
+            if (file.format === name) {
+                return true
+            }
+        }
+        return false
+    }
+    fileOptions['getFileType'] = function(name) {
+        if (this.hasIgnore(name)) {
+            return FileType.IGNORE
+        } else if (this.hasNav(name)) {
+            return FileType.NAVIGATION
+        } else if (this.hasNonChapterXHTML(name)) {
+            return FileType.EXCLUSION
+        } else if (this.hasChapterFormat(name)) {
+            return FileType.CHAPTER
+        } else {
+            return FileType.OTHER
+        }
+    }
+    fileOptions['generateChapterName'] = function(originalName, parentEpub) {
+        let chaptersInd = this['replacementData']['renameInds']['chaptersInd']
+        let newName = CHAPTER_RENAME + chaptersInd
+        this['replacementData']['renameInds']['chaptersInd'] = chaptersInd + 1
+        let entry = {
+            originalName: originalName,
+            newName: newName,
+            parentEpub: parentEpub
+        }
+        this['replacementData']['chapters'].push(entry)
+        return entry
+    }
+    fileOptions['generateExclusionName'] = function(originalName, parentEpub) {
+        entry = this['replacementData']['exclusions'][originalName]
+        if (!entry) {
+            let exclusionsInd = this['replacementData']['renameInds']['exclusionsInd']
+            let newName = EXCLUSION_RENAME + exclusionsInd
+            this['replacementData']['renameInds']['exclusionsInd'] = exclusionsInd + 1
+            entry = {
+                originalName: originalName,
+                newName: newName,
+                parentEpub: parentEpub
+            }
+            this['replacementData']['exclusions'][originalName] = entry
+        }
+        return entry
+    }
+    fileOptions['generateOtherName'] = function(originalName, parentEpub) {
+        let othersInd = this['replacementData']['renameInds']['othersInd']
+        let newName = OTHER_RENAME + othersInd
+        this['replacementData']['renameInds']['othersInd'] = othersInd + 1
+        let entry = {
+            originalName: originalName,
+            newName: newName,
+            parentEpub: parentEpub
+        }
+        this['replacementData']['others'].push(entry)
+        return entry
+    }
+    fileOptions['generateNewName'] = function(originalName, parentEpub, type) {
+        if (type === FileType.CHAPTER) {
+            return this.generateChapterName(originalName, parentEpub)
+        } else if (type === FileType.EXCLUSION) {
+            return this.generateExclusionName(originalName, parentEpub)
+        } else if (type === FileType.OTHER) {
+            return this.generateOtherName(originalName, parentEpub)
+        } else {
+            console.error(`Invalid FileType ${type} supplied to generateNewName`)
+            return null
+        }
+    }
     return fileOptions
 }
 
@@ -786,7 +843,8 @@ app.post('/uploads', upload.array('myFiles', 100), async (request, response) => 
                 await fs.writeFile(path.join(__dirname, 'uploads', ePubDir, file.filename), file.buffer).catch(error => {
                     console.error(error)
                 })
-                await populateEpubDirectory(ePubDir, file.filename, fileOptions)
+                // await populateEpubDirectory(ePubDir, file.filename, fileOptions)
+                await populateEpubDirectory(fileOptions, ePubDir, file.filename, fileOptions)
             }
             // await combineUniqueFiles(ePubDir, fileOptions)
             // await transplantCombinedFileData(fileOptions)

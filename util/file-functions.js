@@ -1,4 +1,5 @@
 const fs = require('fs/promises')
+const path = require('path')
 
 function splitFileName(fileName) {
     const dirRegex = /(.*[\\\/])*([^\\\/]*)/
@@ -33,7 +34,7 @@ async function checkPathExists(path) {
     try {
         await fs.access(path)
     } catch(error) {
-        if(error.code ==='ENOENT') {
+        if(error.code === 'ENOENT') {
             return false
         }
     }
@@ -47,4 +48,13 @@ async function generateDirectory(filePath) {
     })
 }
 
-module.exports = { splitFileName, checkPathExists, generateDirectory }
+function getTopLevelFolder(filePath) {
+    let parts = path.parse(filePath)
+    if (parts.dir !== '') {
+        return getTopLevelFolder(parts.dir)
+    } else {
+        return parts.base
+    }
+}
+
+module.exports = { splitFileName, checkPathExists, generateDirectory, getTopLevelFolder }
