@@ -145,302 +145,237 @@ async function combineUniqueFiles(ePubDir, fileOptions) {
                 console.error(`Unexpected file extension ${ext} encountered`)
         }
     }
-    //TODO: ensure opfNCXLine fallback and opfContentsLine id are the same value
 }
 
 async function harvestNCXData(filePath, fileOptions) {
-    try {
-        const data = await fs.readFile(filePath, {encoding: 'utf8'})
-        let remaining = ''
-        const parentRegex = /^(<meta:EpubManip copyOfFinal=")(.*?)(">)(.*?)(<\/meta>.*)/s
-        // const copyOfFinal = JSON.parse(parentRegex.exec(data)[2])
-        const parentFile = parentRegex.exec(data)[4]
-        const navPointRegex = /(.*?)(<navPoint.*?<\/navPoint>)(.*)/s
-        const navPointIdRegex = /(.*id=")(.*?)(".*)/s
-        const navPointPlayOrderRegex = /(.*playOrder=")(.*?)(".*)/s
-        const navPointSrcRegex = /(.*src=")(.*?)(#.*)?(".*)/s
-        let parsedForNavPoint = navPointRegex.exec(data)
-        while (parsedForNavPoint) {
-            let inNavXHTMLNode = false
-            let isExclusion = false
-            let ignoreWrite = false
-            let exclusionName = ''
-            let playOrderInection = ''
-            remaining = parsedForNavPoint[3]
-            let navPoint = parsedForNavPoint[2]
-            let parsedForPlayOrder = navPointPlayOrderRegex.exec(navPoint)
-            if (parsedForPlayOrder) {
-                navPoint = `${parsedForPlayOrder[1]}${fileOptions['cumulativeData']['ncxInd']}${parsedForPlayOrder[3]}`
-            } else {
-                playOrderInection = `" playOrder="${fileOptions['cumulativeData']['ncxInd']}`
-            }
-            let parsedForId = navPointIdRegex.exec(navPoint)
-            navPoint = `${parsedForId[1]}navPoint-${fileOptions['cumulativeData']['ncxInd']}${playOrderInection}${parsedForId[3]}`
-            let parsedForSrc = navPointSrcRegex.exec(navPoint)
-            let fileParts = ff.splitFileName(parsedForSrc[2])
-            let [name, ext] = [fileParts.name, fileParts.ext]
-            let newName = name
-            for (let navTitle of fileOptions['xhtmlNav']) {
-                if (navTitle.format === name) {
-                    let savedName = ff.splitFileName(fileOptions['uniqueFileLocs']['xhtml']).name
-                    inNavXHTMLNode = true
-                    if (savedName !== name) {
-                        ignoreWrite = true
-                    }
-                    break
+    const data = await fs.readFile(filePath, {encoding: 'utf8'})
+    const parentRegex = /^(<meta:EpubManip copyOfFinal=")(.*?)(">)(.*?)(<\/meta>.*)/s
+    const parentFile = parentRegex.exec(data)[4]
+    let navPoints = extractSections(data, /(\n*)(\s*)(<navPoint.*?<\/navPoint>)/gs, 0)
+
+    for (let navPoint of navPoints) {
+        navPoint = navPoint.replaceAll(/\splayOrder=".*?"/gs, '')
+
+        renameInfo = handleNodeFileRename(fileOptions, navPoint, /(src=")(.*?)(#.*)?(")/s, 2, '.ncx', parentFile)
+        
+        if (!renameInfo.isNoMatch && !renameInfo.isIgnoreNode && !renameInfo.isUniqueFileAlreadyExists && renameInfo.type !== FileType.IGNORE) {
+            navPoint = renameInfo.content
+            type = renameInfo.type
+            if (type === FileType.NAVIGATION) {
+                if (!fileOptions['cumulativeData']['ncxContentNavPoint']) {
+                    fileOptions['cumulativeData']['ncxContentNavPoint'] = navPoint
                 }
+            } else if (type === FileType.CHAPTER) {
+                fileOptions['cumulativeData']['ncxNavPoints'].push(navPoint)
+            } else if (type === FileType.OTHER || type === FileType.EXCLUSION) {
+                fileOptions['cumulativeData']['ncxNavPointsNonChapters'].push(navPoint)
             }
-            if (!inNavXHTMLNode) {
-                for (let file of fileOptions['nonChapterXHTML']) {
-                    if (name === file.fileName) {
-                        newName = `exclusion${file.id}`
-                        isExclusion = true
-                        exclusionName = name
-                        break
-                    }
-                }
-                if (!isExclusion) {
-                    newName = fileOptions['renameHistory'][`${name}${parentFile}`]
-                    if(!newName) {
-                        newName = name
-                    }
-                }
-            }
-            const dirKey = `${newName}${ext}`
-            navPoint = `${parsedForSrc[1]}${fileOptions['fileDirs'][dirKey]}${parsedForSrc[3] || ''}${parsedForSrc[4]}`
-            if (!ignoreWrite) {
-                if (inNavXHTMLNode) {
-                    if (fileOptions['cumulativeData']['ncxContentsBlock'].length === 0) {
-                        fileOptions['cumulativeData']['ncxContentsBlock'].push(navPoint)
-                        fileOptions['cumulativeData']['ncxInd']++
-                    }
-                } else if (isExclusion) {
-                    if (!fileOptions['cumulativeData']['ncxRecordedExclusions'][exclusionName]){
-                        fileOptions['cumulativeData']['ncxNavMap'].push(navPoint)
-                        fileOptions['cumulativeData']['ncxRecordedExclusions'][exclusionName] = true
-                        fileOptions['cumulativeData']['ncxInd']++
-                    }
-                } else {
-                    fileOptions['cumulativeData']['ncxNavMap'].push(navPoint)
-                    fileOptions['cumulativeData']['ncxInd']++
-                }
-            }
-            parsedForNavPoint = navPointRegex.exec(remaining)
         }
-    } catch (error) {
-        console.error(error)
     }
 }
 
 async function harvestOPFData(filePath, fileOptions) {
-    try {
-        const data = await fs.readFile(filePath, {encoding: 'utf8'})
-        let remaining = ''
-        const spineRefs = {}
-        const parentRegex = /^(<meta:EpubManip copyOfFinal=")(.*?)(">)(.*?)(<\/meta>.*)/s
-        const copyOfFinal = JSON.parse(parentRegex.exec(data)[2])
-        const parentFile = parentRegex.exec(data)[4]
-        const itemRegex = /(.*?)(<item .*?\/>)(.*)/s
-        const itemHrefRegex = /(.*href=")(.*?)(".*)/s
-        const itemIdRegex = /(.*id=")(.*?)(".*)/s
-        const itemRefRegex = /(.*?)(<itemref.*?\/>)(.*)/s
-        const itemRefIdRefRegex = /(.*idref=")(.*?)(".*)/s
-        const referenceHrefRegex = /(.*?)(<reference.*?)(href=")(.*?)(#.*)?(".*?\/>)(.*)/s
-        let parsedForItem = itemRegex.exec(data)
-        while (parsedForItem) {
-            let inNavXHTMLNode = false
-            let isExclusion = false
-            let isNcxNode = false
-            let ignoreWrite = false
-            let isOther = false
-            let exclusionName = ''
-            remaining = parsedForItem[3]
-            let item = parsedForItem[2]
-            let parsedForHref = itemHrefRegex.exec(item)
-            const fileParts = ff.splitFileName(parsedForHref[2])
-            let [dir, name, ext] = [fileParts.dir, fileParts.name, fileParts.ext]
-            let newName = name
-            if (ext === '.ncx') {
-                isNcxNode = true
-                if (fileOptions['cumulativeData']['opfNCXLine']) {
-                    ignoreWrite = true
-                }
-            } else if (ext === '.xhtml') {
-                for (let navTitle of fileOptions['xhtmlNav']) {
-                    if (navTitle.format === name) {
-                        let savedName = ff.splitFileName(fileOptions['uniqueFileLocs']['xhtml']).name
-                        inNavXHTMLNode = true
-                        if (savedName !== name) {
-                            ignoreWrite = true
-                        }
-                        break
-                    }
-                }
-                if (!inNavXHTMLNode) {
-                    for (let file of fileOptions['nonChapterXHTML']) {
-                        if (name === file.fileName) {
-                            newName = `exclusion${file.id}`
-                            isExclusion = true
-                            exclusionName = name
-                            break
-                        }
-                    }
-                    if (!isExclusion) {
-                        newName = fileOptions['renameHistory'][`${name}${parentFile}`]
-                    }
-                }
-            } else {
-                isOther = true
-            }
-            let dirKey = `${newName}${ext}`
-            item = `${parsedForHref[1]}${fileOptions['fileDirs'][dirKey]}${parsedForHref[3]}`
-            let parsedforId = itemIdRegex.exec(item)
-            const originalID = parsedforId[2]
-            const newID = newName
-            item = `${parsedforId[1]}${newID}${parsedforId[3]}`
-            if (!ignoreWrite) {
-                if (isNcxNode) {
-                    if (!fileOptions['cumulativeData']['opfNCXLine']) {
-                        fileOptions['cumulativeData']['opfNCXLine'] = item
-                    }
-                } else if (inNavXHTMLNode) {
-                    if (!fileOptions['cumulativeData']['opfContentsLine']) {
-                        fileOptions['cumulativeData']['opfContentsLine'] = item
-                        spineRefs[originalID] = newID
-                    }
-                } else if (isExclusion) {
-                    if (!fileOptions['cumulativeData']['opfRecordedExclusions'][exclusionName]) {
-                        fileOptions['cumulativeData']['opfManifestData'].push(item)
-                        fileOptions['cumulativeData']['opfRecordedExclusions'][exclusionName] = true
-                        spineRefs[originalID] = newID
-                    }
+    const data = await fs.readFile(filePath, {encoding: 'utf8'})
+    const parentRegex = /^(<meta:EpubManip copyOfFinal=")(.*?)(">)(.*?)(<\/meta>)/s
+    const copyOfFinal = JSON.parse(parentRegex.exec(data)[2])
+    const parentFile = parentRegex.exec(data)[4]
+    const spineRefs = {}
+
+    let items = extractSections(data, /(\n*)(\s*)(<item .*?\/>)/gs, 0)
+    for (let item of items) {
+        renameInfo = handleNodeFileRename(fileOptions, item, /(href=")(.*?)(")/s, 2, '.opf', parentFile)
+
+        if (!renameInfo.isNoMatch && !renameInfo.isIgnoreNode && !renameInfo.isUniqueFileAlreadyExists && renameInfo.type !== FileType.IGNORE) {
+            let type = renameInfo.type
+            let content = renameInfo.content
+            let newId = path.parse(renameInfo.newPath).base
+            const itemIdRegex = /(id=")(.*?)(")/s
+            let match = itemIdRegex.exec(content)
+            if (match) {
+                spineRefs[match[2]] = {'newId': newId, 'type': type}
+                content = content.replace(match[0], `id="${newId}"`)
+                if (renameInfo.isNCXNode) {
+                    fileOptions['cumulativeData']['opfNCXElement'] = content
+                    fileOptions['cumulativeData']['opfSpineToc'] = newId
+                } else if (type === FileType.NAVIGATION) {
+                    fileOptions['cumulativeData']['opfContentsElement'] = content
+                    fileOptions['cumulativeData']['opfFallback'] = newId
                 } else {
-                    if (isOther) {
-                        if (!fileOptions['cumulativeData']['opfRecordedOthers'][`${name}${ext}`]) {
-                            fileOptions['cumulativeData']['opfManifestData'].push(item)
-                            fileOptions['cumulativeData']['opfRecordedOthers'][`${name}${ext}`] = true
-                        }
-                    } else {
-                        fileOptions['cumulativeData']['opfManifestData'].push(item)
-                        spineRefs[originalID] = newID
-                    }
+                    fileOptions['cumulativeData']['opfManifestData'].push(content)
                 }
             }
-            parsedForItem = itemRegex.exec(remaining)
         }
-        let parsedForItemRef = itemRefRegex.exec(remaining)
-        while (parsedForItemRef) {
-            remaining = parsedForItemRef[3]
-            let item = parsedForItemRef[2]
-            let parsedForItemRefIdRef= itemRefIdRefRegex.exec(item)
-            let name = parsedForItemRefIdRef[2]
-            if (spineRefs[name]) {
-                fileOptions['cumulativeData']['opfSpineOther'].push(`${parsedForItemRefIdRef[1]}${spineRefs[name]}${parsedForItemRefIdRef[3]}`)
+    }
+
+    let itemRefs = extractSections(data, /(\n*)(\s*)(<itemref.*?\/>)/gs, 0)
+    for (let itemRef of itemRefs) {
+        const itemRefIdRefRegex = /(idref=")(.*?)(")/s
+        let match = itemRefIdRefRegex.exec(itemRef)
+        if (match) {
+            let ref = spineRefs[match[2]]
+            if (ref) {
+                let newName = ref['newId']
+                let type = ref['type']
+                itemRef = itemRef.replace(match[0], match[1] + newName + match[3])
+                if (type === FileType.CHAPTER) {
+                    fileOptions['cumulativeData']['opfSpineData'].push(itemRef)
+                } else if (type === FileType.EXCLUSION || type === FileType.OTHER) {
+                    fileOptions['cumulativeData']['opfSpineNonChapters'].push(itemRef)
+                } else if (type === FileType.NAVIGATION) {
+                    fileOptions['cumulativeData']['opfSpineContents'] = itemRef
+                }
             }
-            parsedForItemRef = itemRefRegex.exec(remaining)
         }
-        if (copyOfFinal) {
-            let parsedForReferenceHref = referenceHrefRegex.exec(remaining)
-            while (parsedForReferenceHref) {
-                remaining = parsedForReferenceHref[7]
-                let fileParts = ff.splitFileName(parsedForReferenceHref[4])
-                let dirKey = `${fileParts.name}${fileParts.ext}`
-                fileOptions['cumulativeData']['opfReference'].push(`${parsedForReferenceHref[2]}${parsedForReferenceHref[3]}${fileOptions['fileDirs'][dirKey]}${parsedForReferenceHref[5] || ''}${parsedForReferenceHref[6]}`)
-                parsedForReferenceHref = referenceHrefRegex.exec(remaining)
+    }
+
+    if (copyOfFinal) {
+        let references = extractSections(data, /(\n*)(\s*)(<reference.*?\/>)/gs, 0)
+        for (let reference of references) {
+            let renameInfo = handleNodeFileRename(fileOptions, reference, /(href=")(.*?)(#.*)?(")/s, 2, '.opf', parentFile)
+            if (!renameInfo.isNoMatch && renameInfo.type !== FileType.IGNORE) {
+                fileOptions['cumulativeData']['opfReferenceData'].push(renameInfo.content)
             }
         }
-    } catch (error) {
-        console.error(error)
     }
 }
 
 async function harvestContentsData(filePath, fileOptions) {
-    try {
-        const data = await fs.readFile(filePath, {encoding: 'utf8'})
-        let remaining = ''
-        const parentRegex = /^(<meta:EpubManip copyOfFinal=")(.*?)(">)(.*?)(<\/meta>.*)/s
-        const copyOfFinal = JSON.parse(parentRegex.exec(data)[2])
-        const parentFile = parentRegex.exec(data)[4]
-        const olRegex = /(.*?)(<ol>.*?<\/ol>)(.*)/s
-        const liRegex = /(.*?)(<li>.*?<\/li>)(.*)/s
-        const liHrefRegex = /(.*href=")(.*?)(#.*)?(".*)/s
-        let parsedForOl = olRegex.exec(data)
-        const ol1 = parsedForOl[2]
-        let parsedForLi = liRegex.exec(ol1)
-        while (parsedForLi) {
-            let inNavXHTMLNode = false
-            let ignoreWrite = false
-            let isExclusion = false
-            let exclusionName = ''
-            let item = parsedForLi[2]
-            remaining = parsedForLi[3]
-            let parsedForLiHref = liHrefRegex.exec(item)
-            const fileParts = ff.splitFileName(parsedForLiHref[2])
-            let [name, ext] = [fileParts.name, fileParts.ext]
-            let newName = name
-            for (let navTitle of fileOptions['xhtmlNav']) {
-                if (navTitle.format === name) {
-                    let savedName = ff.splitFileName(fileOptions['uniqueFileLocs']['xhtml']).name
-                    inNavXHTMLNode = true
-                    if (savedName !== name) {
-                        ignoreWrite = true
-                    }
-                    break
-                }
+    const data = await fs.readFile(filePath, {encoding: 'utf8'})
+    const parentRegex = /^(<meta:EpubManip copyOfFinal=")(.*?)(">)(.*?)(<\/meta>)/s
+    const copyOfFinal = JSON.parse(parentRegex.exec(data)[2])
+    const parentFile = parentRegex.exec(data)[4]
+
+    let OLs = extractSections(data, /(<ol>.*?<\/ol>)/gs, 0)
+    let OL1 = OLs[0]
+    const liRegex = /(\n*)(\s*)(<li>.*?<\/li>)/gs
+    const hrefRegex = /(href=")(.*?)(#.*)?(")/s
+    let OL1LIs = extractSections(OL1, liRegex, 0)
+
+    for (let LI of OL1LIs) {
+        let renameInfo = handleNodeFileRename(fileOptions, LI, hrefRegex, 2, '.xhtml', parentFile)
+        if (!renameInfo.isNoMatch && !renameInfo.isIgnoreNode && !renameInfo.isUniqueFileAlreadyExists && renameInfo.type !== FileType.IGNORE) {
+            let type = renameInfo.type
+            if (type === FileType.CHAPTER) {
+                fileOptions['cumulativeData']['contentsOL1Data'].push(renameInfo.content)
+            } else if (type === FileType.EXCLUSION || type === FileType.OTHER) {
+                fileOptions['cumulativeData']['contentsOL1NonChapters'].push(renameInfo.content)
             }
-            if (!inNavXHTMLNode) {
-                for (let file of fileOptions['nonChapterXHTML']) {
-                    if (name === file.fileName) {
-                        newName = `exclusion${file.id}`
-                        isExclusion = true
-                        exclusionName = name
-                        break
-                    }
-                }
-                if (!isExclusion) {
-                    newName = fileOptions['renameHistory'][`${name}${parentFile}`]
-                }
-            }
-            const dirKey = `${newName}${ext}`
-            item = `${parsedForLiHref[1]}${fileOptions['fileDirs'][dirKey]}${parsedForLiHref[3] || ''}${parsedForLiHref[4]}`
-            if (!ignoreWrite) {
-                if (isExclusion) {
-                    if (!fileOptions['cumulativeData']['contentsRecordedExclusions'][exclusionName]) {
-                        fileOptions['cumulativeData']['contentsOL1'].push(item)
-                        fileOptions['cumulativeData']['contentsRecordedExclusions'][exclusionName] = true
-                    }
-                } else {
-                    fileOptions['cumulativeData']['contentsOL1'].push(item)
-                }
-            }
-            parsedForLi = liRegex.exec(remaining)
         }
-        if (copyOfFinal) {
-            parsedForOl = olRegex.exec(parsedForOl[3])
-            const ol2 = parsedForOl[2]
-            let parsedForLi = liRegex.exec(ol2)
-            while (parsedForLi) {
-                let item = parsedForLi[2]
-                remaining = parsedForLi[3]
-                let parsedForLiHref = liHrefRegex.exec(item)
-                const fileParts = ff.splitFileName(parsedForLiHref[2])
-                const [name, ext] = [fileParts.name, fileParts.ext]
-                let newName = name
-                if (ext) {
-                    const savedName = ff.splitFileName(fileOptions['uniqueFileLocs']['xhtml']).name
-                    if (name !== savedName) {
-                        newName = fileOptions['renameHistory'][`${name}${parentFile}`]
-                    }
-                    const dirKey = `${newName}${ext}`
-                    item = `${parsedForLiHref[1]}${fileOptions['fileDirs'][dirKey]}${parsedForLiHref[3] || ''}${parsedForLiHref[4]}`
-                }
-                fileOptions['cumulativeData']['contentsOL2'].push(item)
-                parsedForLi = liRegex.exec(remaining)
-            }
-        }     
-    } catch (error) {
-        console.error(error)
     }
+
+    if (copyOfFinal) {
+        let OL2 = OLs[1]
+        let OL2LIs = extractSections(OL2, liRegex, 0)
+
+        for (let LI of OL2LIs) {
+            let renameInfo = handleNodeFileRename(fileOptions, LI, hrefRegex, 2, '.xhtml', parentFile)
+            if (!renameInfo.isNoMatch && !renameInfo.isUniqueFileAlreadyExists && renameInfo.type !== FileType.IGNORE) {
+                fileOptions['cumulativeData']['contentsOL2Data'].push(renameInfo.content)
+            }
+        }
+    }
+}
+
+function extractSections(data, patternString, groupToExtract) {
+    let ret = []
+    let match
+
+    while ((match = patternString.exec(data))) {
+        ret.push(match[groupToExtract])
+    }
+
+    return ret
+}
+
+function handleNodeFileRename(fileOptions, content, patternString, groupToRename, parentExt, parentEpub) {
+    ret = {}
+    let match
+
+    if ((match = patternString.exec(content))) {
+        let originalPath = match[groupToRename]
+        let parts = path.parse(originalPath)
+        let [fileName, ext] = [parts.name, parts.ext]
+        let type = fileOptions.getFileType(fileName)
+        let newName = fileName
+
+        //link to local element, e.g. href="#anchor"
+        if (originalPath === '') {
+            ret['isNoMatch'] = false
+            ret['type'] = type
+            ret['originalPath'] = originalPath
+            ret['content'] = content
+            return ret
+        }
+
+        if (ext === '.xhtml') {
+            if (type === FileType.NAVIGATION) {
+                if (parentExt === '.opf' && fileOptions['cumulativeData']['opfContentsElement']) {
+                    ret['isUniqueFileAlreadyExists'] = true
+                }
+                let savedUniqueFileName = path.parse(fileOptions['uniqueFileLocs'][ext]).name
+                if (savedUniqueFileName !== fileName) {
+                    ret['isIgnoreNode'] = true
+                }
+            } else if (type === FileType.EXCLUSION) {
+                newName = fileOptions['replacementData']['exclusions'][fileName]['newName']
+            } else if (type === FileType.CHAPTER) {
+                newName = fileOptions['replacementData'].getChapterName(fileName, parentEpub)
+            } else if (type === FileType.OTHER) {
+                newName = fileOptions['replacementData'].getOtherName(fileName, parentEpub)
+            }
+        } else if (ext === '.ncx') {
+            ret['isNCXNode'] = true
+            if (fileOptions['cumulativeData']['opfNCXElement']) {
+                ret['isUniqueFileAlreadyExists'] = true
+            }
+            let savedUniqueFileName = path.parse(fileOptions['uniqueFileLocs'][ext]).name
+            if (savedUniqueFileName !== fileName) {
+                ret['isIgnoreNode'] = true
+            }
+        } else {
+            //Other
+        }
+
+        if (type !== FileType.IGNORE) {
+            newName = newName || fileName
+            if (!fileOptions['replacementData']['recordedFiles'][parentExt][newName]) {
+                fileOptions['replacementData']['recordedFiles'][parentExt][newName] = true
+            } else {
+                ret['isIgnoreNode'] = true
+            }
+
+            let replacement = fileOptions['fileLocs'][newName + ext]
+            if (parentExt === '.opf') {
+                replacement = replacement.replace(CONTAINER_NAME + path.sep, '')
+            } else {
+                replacement = `/${replacement}`
+            }
+
+            let before = match[0]
+            let after = ''
+            for (let i = 1; i <= match.length - 1; i++) {
+                if (i === groupToRename) {
+                    after = `${after}${replacement}`
+                } else {
+                    after = `${after}${match[i] ?? ''}`
+                }
+            }
+            content = content.replace(before, after)
+
+            ret['newPath'] = replacement
+        }
+
+        ret['isNoMatch'] = false
+        ret['type'] = type
+        ret['originalPath'] = originalPath
+        ret['content'] = content
+    } else {
+        ret['content'] = content
+        ret['isNoMatch'] = true
+        ret['type'] = FileType.IGNORE
+    }
+
+    return ret
 }
 
 //TODO
@@ -699,15 +634,42 @@ function generateFileOptions(fileOptionsJSON) {
             },
         'chapters': [],
         'others': [],
-        'exclusions': {}
+        'exclusions': {},
+        'getChapterName': function(originalName, parentFileName) {
+            for (let chapter of this['chapters']) {
+                if (chapter['originalName'] === originalName && chapter['parentEpub'] === parentFileName) {
+                    return chapter['newName']
+                }
+            }
+            return null
+        },
+        'getOtherName': function(originalName, parentFileName) {
+            for (let other of this['others']) {
+                if (other['originalName'] === originalName && other['parentEpub'] === parentFileName) {
+                    return other['newName']
+                }
+            }
+            return null
+        },
+        'recordedFiles': {'.opf': {}, '.ncx': {}, '.xhtml': {}}
     }
     fileOptions['cumulativeData'] = {
         'ncxInd': 1,
+        'ncxContentNavPoint': '',
+        'ncxNavPoints': [],
+        'ncxNavPointsNonChapters': [],
         'ncxContentsBlock': [],
         'ncxNavMap': [],
         'ncxRecordedExclusions': {},
         'opfNCXLine': '',
         'opfContentsLine': '',
+        'opfContentsElement': '',
+        'opfNCXElement': '',
+        'opfSpineToc': '',
+        'opfFallback': '',
+        'opfSpineData': [],
+        'opfSpineNonChapters': [],
+        'opfReferenceData': [],
         'opfRecordedExclusions': {},
         'opfRecordedOthers': {},
         'opfManifestData': [],
@@ -717,7 +679,10 @@ function generateFileOptions(fileOptionsJSON) {
         'opfReference': [],
         'contentsRecordedExclusions': {},
         'contentsOL1': [],
-        'contentsOL2': []
+        'contentsOL2': [],
+        'contentsOL1Data': [],
+        'contentsOL1NonChapters': [],
+        'contentsOL2Data': []
     }
     fileOptions['tempInds'] = {'.opf': 0, '.ncx': 0, '.xhtml': 0}
     fileOptions['uniqueFileLocs'] = {'.opf': '', '.ncx': '', '.xhtml': '', 'xml': ''}
@@ -846,10 +811,10 @@ app.post('/uploads', upload.array('myFiles', 100), async (request, response) => 
                 // await populateEpubDirectory(ePubDir, file.filename, fileOptions)
                 await populateEpubDirectory(fileOptions, ePubDir, file.filename, fileOptions)
             }
-            // await combineUniqueFiles(ePubDir, fileOptions)
+            await combineUniqueFiles(ePubDir, fileOptions)
             // await transplantCombinedFileData(fileOptions)
             // await updateContainerXML(fileOptions)
-            // // console.log(fileOptions)
+            console.log(fileOptions)
             // // await removeTempManip(ePubDir)
             // await generateEpub(ePubDir)
             // // cleanSubFolders(ePubDir)
