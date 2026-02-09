@@ -57,4 +57,25 @@ function getTopLevelFolder(filePath) {
     }
 }
 
-module.exports = { splitFileName, checkPathExists, generateDirectory, getTopLevelFolder }
+function processReplacements(content, patternString, groupToReplace, func) {
+    let match
+
+    while((match = patternString.exec(content))) {
+        let before = match[0]
+        let replacement = func(match[groupToReplace])
+        let after = ''
+
+        for (let i = 1; i <= match.length - 1; i++) {
+            if (i === groupToReplace) {
+                after = `${after}${replacement}`
+            } else {
+                after = `${after}${match[i] ?? ''}`
+            }
+        }
+        content = content.replace(before, after)
+    }
+    
+    return content
+}
+
+module.exports = { splitFileName, checkPathExists, generateDirectory, getTopLevelFolder, processReplacements }

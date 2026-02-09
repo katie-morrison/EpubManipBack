@@ -145,6 +145,7 @@ async function combineUniqueFiles(ePubDir, fileOptions) {
                 console.error(`Unexpected file extension ${ext} encountered`)
         }
     }
+    fileOptions['cumulativeData'].mergeData()
 }
 
 async function harvestNCXData(filePath, fileOptions) {
@@ -378,75 +379,66 @@ function handleNodeFileRename(fileOptions, content, patternString, groupToRename
     return ret
 }
 
-//TODO
-function attemptRename(fileName, parentFileName, fileOptions) {
-    let newName = fileOptions['renameHistory'][`${fileName}${parentFileName}`]
-    newName = newName || fileName
-    return newName
-}
-
-async function transplantCombinedFileData(fileOptions) {
-    await transplantOPFData(fileOptions)
-    if (fileOptions['uniqueFileLocs']['ncx']) {
-        await transplantNCXData(fileOptions)
-    }
-    if (fileOptions['uniqueFileLocs']['xhtml']) {
-        await transplantContentsData(fileOptions)
-    }
-}
-
-async function transplantOPFData(fileOptions) {
+async function transplantCombinedFileData(fileOptions, ePubDir) {
     try {
-        let data = await fs.readFile(fileOptions['uniqueFileLocs']['opf'], {encoding: 'utf8'})
-        const manifestRegex = /(.*?<manifest>\s*)(.*?)(\s*<\/manifest>.*)/s
-        const spineRegex = /(.*?<spine.*?>\s*)(.*?)(\s*<\/spine>.*)/s
-        const guideRegex = /(.*?<guide.*?>\s*)(.*?)(\s*<\/guide>.*)/s
-        const parsedForManifest = manifestRegex.exec(data)
-        const manifestData = [
-            fileOptions['cumulativeData']['opfNCXLine'],
-            fileOptions['cumulativeData']['opfContentsLine'],
-            ...fileOptions['cumulativeData']['opfManifestData']
-        ].join('\n')
-        const parsedForSpine = spineRegex.exec(parsedForManifest[3])
-        const spineData = fileOptions['cumulativeData']['opfSpineOther'].join('\n')
-        const parsedForGuide = guideRegex.exec(parsedForSpine[3])
-        const guideData = fileOptions['cumulativeData']['opfReference'].join('\n')
-        data = `${parsedForManifest[1]}${manifestData}${parsedForSpine[1]}${spineData}${parsedForGuide[1]}${guideData}${parsedForGuide[3]}`
-        await fs.writeFile(fileOptions['uniqueFileLocs']['opf'], data)
+        let data
+        let next
+        let f = function(val) {
+            let ret = ''
+            for (let i of next) {
+                ret = `${ret}${i}`
+            }
+            return ret
+        }
+        if (fileOptions['uniqueFileLocs']['.ncx']) {
+            const ncxPath = path.join(__dirname, 'output', ePubDir, fileOptions['uniqueFileLocs']['.ncx'])
+            data = await fs.readFile(ncxPath, {encoding: 'utf8'})
+
+            next = [fileOptions['outputName']]
+            data = ff.processReplacements(data, /(<docTitle.*?<text>)(.*?)(\n*)(\s*)(<\/text>)/gs, 2, f)
+
+            next = fileOptions['cumulativeData']['ncxNavPoints']
+            data = ff.processReplacements(data, /(<navMap>)(.*?)(\n*)(\s*)(<\/navMap>)/gs, 2, f)
+
+            await fs.writeFile(ncxPath, data)
+        }
+        if (fileOptions['uniqueFileLocs']['.opf']) {
+            const opfPath = path.join(__dirname, 'output', ePubDir, fileOptions['uniqueFileLocs']['.opf'])
+            data = await fs.readFile(opfPath, {encoding: 'utf8'})
+            
+            next = [fileOptions['outputName']]
+            data = ff.processReplacements(data, /(<dc:title>)(.*?)(\n*)(\s*)(<\/dc:title>)/gs, 2, f)
+
+            next = fileOptions['cumulativeData']['opfManifestData']
+            data = ff.processReplacements(data, /(<manifest>)(.*?)(\n*)(\s*)(<\/manifest>)/gs, 2, f)
+
+            next = [fileOptions['cumulativeData']['opfSpineToc']]
+            data = ff.processReplacements(data, /(<spine.*?toc=")(.*?)(")/gs, 2, f)
+
+            next = fileOptions['cumulativeData']['opfSpineData']
+            data = ff.processReplacements(data, /(<spine.*?>)(.*?)(\n*)(\s*)(<\/spine>)/gs, 2, f)
+
+            next = fileOptions['cumulativeData']['opfReferenceData']
+            data = ff.processReplacements(data, /(<guide.*?>)(.*?)(\n*)(\s*)(<\/guide>)/gs, 2, f)
+
+            await fs.writeFile(opfPath, data)
+        }
+        if (fileOptions['uniqueFileLocs']['.xhtml']) {
+            const xhtmlPath = path.join(__dirname, 'output', ePubDir, fileOptions['uniqueFileLocs']['.xhtml'])
+            data = await fs.readFile(xhtmlPath, {encoding: 'utf8'})
+            
+            next = fileOptions['cumulativeData']['contentsOL1Data']
+            data = ff.processReplacements(data, /(<ol>)(.*?)(\n*)(\s*)(<\/ol>)(.*?)(<ol>)(.*?)(<\/ol>)/gs, 2, f)
+
+            next = fileOptions['cumulativeData']['contentsOL2Data']
+            data = ff.processReplacements(data, /(<ol>)(.*?)(<\/ol>)(.*?)(<ol>)(.*?)(\n*)(\s*)(<\/ol>)/gs, 6, f)
+
+            await fs.writeFile(xhtmlPath, data)
+        }
     } catch (error) {
         console.error(error)
     }
-}
 
-async function transplantNCXData(fileOptions) {
-    try {
-        let data = await fs.readFile(fileOptions['uniqueFileLocs']['ncx'], {encoding: 'utf8'})
-        const navMapRegex = /(.*?<navMap>\s*)(.*?)(\s*<\/navMap>.*)/s
-        const parsedForNavMap = navMapRegex.exec(data)
-        const navMapData = [
-            ...fileOptions['cumulativeData']['ncxContentsBlock'],
-            ...fileOptions['cumulativeData']['ncxNavMap']
-        ].join('\n')
-        data = `${parsedForNavMap[1]}${navMapData}${parsedForNavMap[3]}`
-        await fs.writeFile(fileOptions['uniqueFileLocs']['ncx'], data)
-    } catch (error) {
-        console.error(error)
-    }
-}
-
-async function transplantContentsData(fileOptions) {
-    try {
-        let data = await fs.readFile(fileOptions['uniqueFileLocs']['xhtml'], {encoding: 'utf8'})
-        const olRegex = /(.*?<ol>\s*)(.*?)(\s*<\/ol>.*)/s
-        const parsedForFirstOL = olRegex.exec(data)
-        const ol1Data = fileOptions['cumulativeData']['contentsOL1'].join('\n')
-        const parsedForSecondOL = olRegex.exec(parsedForFirstOL[3])
-        const ol2Data = fileOptions['cumulativeData']['contentsOL2'].join('\n')
-        data = `${parsedForFirstOL[1]}${ol1Data}${parsedForSecondOL[1]}${ol2Data}${parsedForSecondOL[3]}`
-        await fs.writeFile(fileOptions['uniqueFileLocs']['xhtml'], data)
-    } catch (error) {
-        console.error(error)
-    }
 }
 
 async function updateContainerXML(fileOptions) {
@@ -682,7 +674,64 @@ function generateFileOptions(fileOptionsJSON) {
         'contentsOL2': [],
         'contentsOL1Data': [],
         'contentsOL1NonChapters': [],
-        'contentsOL2Data': []
+        'contentsOL2Data': [],
+        'mergeData': function() {
+            if (this['ncxContentNavPoint']) {
+                this['ncxNavPointsNonChapters'].unshift(this['ncxContentNavPoint'])
+                this['ncxContentNavPoint'] = ''
+            }
+
+            const finalNavPoints = []
+            let navInd = 1
+            let f = function(val) {
+                let ind = navInd
+                navInd++
+                return `navPoint-${ind}" playOrder="${ind}`
+            }
+            const idRegex = /(id=")(.*?)(")/gs
+            for (let navPoint of this['ncxNavPointsNonChapters']) {
+                navPoint = ff.processReplacements(navPoint, idRegex, 2, f)
+                finalNavPoints.push(navPoint)
+            }
+            for (let navPoint of this['ncxNavPoints']) {
+                navPoint = ff.processReplacements(navPoint, idRegex, 2, f)
+                finalNavPoints.push(navPoint)
+            }
+            this['ncxNavPoints'] = finalNavPoints
+            this['ncxNavPointsNonChapters'] = []
+
+            if (this['opfContentsElement']) {
+                this['opfManifestData'].unshift(this['opfContentsElement'])
+                this['opfContentsElement'] = ''
+            }
+
+            if (this['opfNCXElement']) {
+                const fallbackRegex = /(fallback=")(.*?)(")/s
+                let match = fallbackRegex.exec(this['opfNCXElement'])
+                if (match) {
+                    this['opfNCXElement'] = this['opfNCXElement'].replace(match[0], match[1] + this['opfFallback'] + match[3])
+                }
+                this['opfManifestData'].unshift(this['opfNCXElement'])
+                this['opfNCXElement'] = ''
+            }
+
+            if (this['opfSpineContents']) {
+                this['opfSpineNonChapters'].unshift(this['opfSpineContents'])
+                this['opfSpineContents'] = ''
+            }
+
+            const finalSpineData = []
+            finalSpineData.push(...this['opfSpineNonChapters'])
+            finalSpineData.push(...this['opfSpineData'])
+            this['opfSpineData'] = finalSpineData
+            this['opfSpineNonChapters'] = []
+
+            const finalContentsOL1 = []
+            finalContentsOL1.push(...this['contentsOL1NonChapters'])
+            finalContentsOL1.push(...this['contentsOL1Data'])
+            this['contentsOL1Data'] = finalContentsOL1
+            this['contentsOL1NonChapters'] = []
+        }
     }
     fileOptions['tempInds'] = {'.opf': 0, '.ncx': 0, '.xhtml': 0}
     fileOptions['uniqueFileLocs'] = {'.opf': '', '.ncx': '', '.xhtml': '', 'xml': ''}
@@ -812,9 +861,9 @@ app.post('/uploads', upload.array('myFiles', 100), async (request, response) => 
                 await populateEpubDirectory(fileOptions, ePubDir, file.filename, fileOptions)
             }
             await combineUniqueFiles(ePubDir, fileOptions)
-            // await transplantCombinedFileData(fileOptions)
+            await transplantCombinedFileData(fileOptions, ePubDir)
             // await updateContainerXML(fileOptions)
-            console.log(fileOptions)
+            // console.log(fileOptions)
             // // await removeTempManip(ePubDir)
             // await generateEpub(ePubDir)
             // // cleanSubFolders(ePubDir)
