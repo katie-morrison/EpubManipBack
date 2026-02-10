@@ -441,18 +441,37 @@ async function transplantCombinedFileData(fileOptions, ePubDir) {
 
 }
 
-async function updateContainerXML(fileOptions) {
-    try {
-        let data = await fs.readFile(fileOptions['uniqueFileLocs']['xml'], {encoding: 'utf8'})
-        const opfRegex = /(.*?full-path=")(.*?)(".*)/s
-        const parsedForOPF = opfRegex.exec(data)
-        const fileParts = ff.splitFileName(fileOptions['uniqueFileLocs']['opf'])
-        const opfPath = path.join('OPS', `${fileParts.name}${fileParts.ext}`)
-        data = `${parsedForOPF[1]}${opfPath}${parsedForOPF[3]}`
-        await fs.writeFile(fileOptions['uniqueFileLocs']['xml'], data)
-    } catch (error) {
-        console.error(error)
+async function updateContainerXML(fileOptions, ePubDir) {
+    const dir = path.join(__dirname, 'output', ePubDir)
+    const files = await fs.readdir(dir, {withFileTypes: true, recursive: true})
+    for (let file of files) {
+        if (file.isFile()) {
+            const filePath = path.join(file.path, file.name)
+            if (file.name === 'container.xml') {
+                recalculateDirectory(fileOptions, filePath, true)
+            } else if (path.parse(filePath).ext === '.xhtml') {
+                recalculateDirectory(fileOptions, filePath, false)
+            }
+        }
     }
+}
+
+async function recalculateDirectory(fileOptions, filePath, isContainerXMLFile) {
+    let data = await fs.readFile(filePath, {encoding: 'utf8'})
+    if (isContainerXMLFile) {
+        let f = function(val) {
+            return fileOptions['uniqueFileLocs']['.opf']
+        }
+        data = ff.processReplacements(data, /(full-path=")(.*?)(")/gs, 2, f)
+    } else {
+        let f = function(val) {
+            const oldName = path.parse(val).base
+            return `/${fileOptions['fileLocs'][oldName]}`
+        }
+        data = ff.processReplacements(data, /(href=")(.*?)(#.*)?(")/gs, 2, f)
+        data = ff.processReplacements(data, /(src=")(.*?)(#.*)?(")/gs, 2, f)
+    }
+    await fs.writeFile(filePath, data)
 }
 
 /**
@@ -862,7 +881,7 @@ app.post('/uploads', upload.array('myFiles', 100), async (request, response) => 
             }
             await combineUniqueFiles(ePubDir, fileOptions)
             await transplantCombinedFileData(fileOptions, ePubDir)
-            // await updateContainerXML(fileOptions)
+            await updateContainerXML(fileOptions, ePubDir)
             // console.log(fileOptions)
             // // await removeTempManip(ePubDir)
             // await generateEpub(ePubDir)

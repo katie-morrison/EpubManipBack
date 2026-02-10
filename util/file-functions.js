@@ -57,6 +57,12 @@ function getTopLevelFolder(filePath) {
     }
 }
 
+function getParentFolderName(filePath) {
+    const parts = path.parse(filePath)
+    const parentDir = parts.dir
+    return path.parse(parentDir).base
+}
+
 function processReplacements(content, patternString, groupToReplace, func) {
     let match
 
@@ -78,4 +84,4 @@ function processReplacements(content, patternString, groupToReplace, func) {
     return content
 }
 
-module.exports = { splitFileName, checkPathExists, generateDirectory, getTopLevelFolder, processReplacements }
+module.exports = { splitFileName, checkPathExists, generateDirectory, getTopLevelFolder, processReplacements, getParentFolderName }
