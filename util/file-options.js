@@ -217,6 +217,13 @@ function generateFileOptions(fileOptionsJSON) {
             return null
         }
     }
+    fileOptions['getNewNameFormats'] = function() {
+        return {
+            'chapter': CHAPTER_RENAME,
+            'exclusion': EXCLUSION_RENAME,
+            'other': OTHER_RENAME
+        }
+    }
 
     return fileOptions
 }
@@ -244,6 +251,18 @@ function cleanFileOptions(fileOptions) {
             nonChapters.push(e['fileName'])
             return true
         }
+    })
+
+    let replacements = fileOptions['replacements'].map(replacement => {
+        replacement['before'] = replacement['before'].replaceAll(/[<>]/gs, '')
+        replacement['after'] = replacement['after'].replaceAll(/[<>]/gs, '')
+        return replacement
+    })
+    fileOptions['replacements'] = replacements.filter(replacement => {
+        if (replacement['before'] === '' || replacement['after'] === '') {
+            return false
+        }
+        return true
     })
 }
 

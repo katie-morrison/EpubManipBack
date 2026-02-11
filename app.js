@@ -434,7 +434,7 @@ async function transplantCombinedFileData(fileOptions, ePubDir) {
 
 }
 
-async function updateContainerXML(fileOptions, ePubDir) {
+async function updateXMLandXHTMLFiles(fileOptions, ePubDir) {
     const dir = path.join(__dirname, 'output', ePubDir)
     const files = await fs.readdir(dir, {withFileTypes: true, recursive: true})
     for (let file of files) {
@@ -443,7 +443,10 @@ async function updateContainerXML(fileOptions, ePubDir) {
             if (file.name === 'container.xml') {
                 recalculateDirectory(fileOptions, filePath, true)
             } else if (path.parse(filePath).ext === '.xhtml') {
-                recalculateDirectory(fileOptions, filePath, false)
+                await recalculateDirectory(fileOptions, filePath, false)
+                if (path.join(__dirname, 'output', ePubDir, fileOptions['uniqueFileLocs']['.xhtml']) !== filePath) {
+                    makeReplacements(fileOptions, filePath)
+                }
             }
         }
     }
@@ -465,6 +468,29 @@ async function recalculateDirectory(fileOptions, filePath, isContainerXMLFile) {
         data = ff.processReplacements(data, /(src=")(.*?)(#.*)?(")/gs, 2, f)
     }
     await fs.writeFile(filePath, data)
+}
+
+async function makeReplacements(fileOptions, filePath) {
+    if (fileOptions['replacements'].length) {
+        let data = await fs.readFile(filePath, {encoding: 'utf8'})
+        const bodyRegex = /(<body>)(.*?)(<\/body>)/gs
+        const contentRegex = /(>)(.*?)(<)/gs
+        const match = bodyRegex.exec(data)
+        if (match) {
+            let body = match[2]
+            for (let replacement of fileOptions['replacements']) {
+                let f = function(val) {
+                    return val.replaceAll(replacement['before'], replacement['after'])
+                }
+                body = ff.processReplacements(body, contentRegex, 2, f)
+            }
+
+            data = data.replace(match[0], `${match[1]}${body}${match[3]}`)
+        }
+
+        
+        await fs.writeFile(filePath, data)
+    }
 }
 
 /**
@@ -625,10 +651,10 @@ app.post('/uploads', upload.array('myFiles', 100), async (request, response) => 
                 await populateEpubDirectory(fileOptions, ePubDir, file.filename, fileOptions)
             }
             await combineUniqueFiles(ePubDir, fileOptions)
+            // await removeTempManip(ePubDir)
             await transplantCombinedFileData(fileOptions, ePubDir)
-            await updateContainerXML(fileOptions, ePubDir)
+            await updateXMLandXHTMLFiles(fileOptions, ePubDir)
             // console.log(fileOptions)
-            // // await removeTempManip(ePubDir)
             // await generateEpub(ePubDir)
             // // cleanSubFolders(ePubDir)
             response.send(ePubDir)
