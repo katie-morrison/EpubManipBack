@@ -642,7 +642,7 @@ app.post('/uploads', upload.array('myFiles', 100), async (request, response) => 
         if (files.length > 0) {
             const ePubDir = files[0].filename
             await generateSubFolders(ePubDir)
-            const fileOptions = fo.generateFileOptions(request.body['fileOptions'])
+            const fileOptions = new fo.FileOptions(request.body['fileOptions'])
             for (let file of files) {
                 await fs.writeFile(path.join(__dirname, 'uploads', ePubDir, file.filename), file.buffer).catch(error => {
                     console.error(error)
@@ -654,7 +654,7 @@ app.post('/uploads', upload.array('myFiles', 100), async (request, response) => 
             // await removeTempManip(ePubDir)
             await transplantCombinedFileData(fileOptions, ePubDir)
             await updateXMLandXHTMLFiles(fileOptions, ePubDir)
-            // console.log(fileOptions)
+            console.log(fileOptions)
             // await generateEpub(ePubDir)
             // // cleanSubFolders(ePubDir)
             response.send(ePubDir)

@@ -6,54 +6,61 @@ const EXCLUSION_RENAME = 'exclusion'
 const CHAPTER_RENAME = 'chapter'
 const OTHER_RENAME = 'other'
 
-const replacementData = {
-    'renameInds': {
+class ReplacementData {
+    constructor() {
+        this.renameInds = {
         'chaptersInd': 1,
         'othersInd': 1,
         'exclusionsInd': 1,
-        },
-    'chapters': [],
-    'others': [],
-    'exclusions': {},
-    'getChapterName': function(originalName, parentFileName) {
-        for (let chapter of this['chapters']) {
+        }
+        this.chapters = []
+        this.others = []
+        this.exclusions = {}
+        this.recordedFiles = {'.opf': {}, '.ncx': {}, '.xhtml': {}}
+    }
+
+    getChapterName(originalName, parentFileName) {
+        for (let chapter of this.chapters) {
             if (chapter['originalName'] === originalName && chapter['parentEpub'] === parentFileName) {
                 return chapter['newName']
             }
         }
         return null
-    },
-    'getOtherName': function(originalName, parentFileName) {
-        for (let other of this['others']) {
+    }
+
+    getOtherName(originalName, parentFileName) {
+        for (let other of this.others) {
             if (other['originalName'] === originalName && other['parentEpub'] === parentFileName) {
                 return other['newName']
             }
         }
         return null
-    },
-    'recordedFiles': {'.opf': {}, '.ncx': {}, '.xhtml': {}}
+    }
 }
 
-const cumulativeData = {
-    'ncxContentNavPoint': '',
-    'ncxNavPoints': [],
-    'ncxNavPointsNonChapters': [],
-    'opfContentsElement': '',
-    'opfNCXElement': '',
-    'opfSpineToc': '',
-    'opfFallback': '',
-    'opfSpineData': [],
-    'opfSpineNonChapters': [],
-    'opfReferenceData': [],
-    'opfManifestData': [],
-    'opfSpineContents': '',
-    'contentsOL1Data': [],
-    'contentsOL1NonChapters': [],
-    'contentsOL2Data': [],
-    'mergeData': function() {
-        if (this['ncxContentNavPoint']) {
-            this['ncxNavPointsNonChapters'].unshift(this['ncxContentNavPoint'])
-            this['ncxContentNavPoint'] = ''
+class CumulativeData {
+    constructor() {
+        this.ncxContentNavPoint = ''
+        this.ncxNavPoints = []
+        this.ncxNavPointsNonChapters = []
+        this.opfContentsElement = ''
+        this.opfNCXElement = ''
+        this.opfSpineToc = ''
+        this.opfFallback = ''
+        this.opfSpineData = []
+        this.opfSpineNonChapters = []
+        this.opfReferenceData = []
+        this.opfManifestData = []
+        this.opfSpineContents = ''
+        this.contentsOL1Data = []
+        this.contentsOL1NonChapters = []
+        this.contentsOL2Data = []
+    }
+
+    mergeData() {
+        if (this.ncxContentNavPoint) {
+            this.ncxNavPointsNonChapters.unshift(this.ncxContentNavPoint)
+            this.ncxContentNavPoint = ''
         }
 
         const finalNavPoints = []
@@ -64,63 +71,72 @@ const cumulativeData = {
             return `navPoint-${ind}" playOrder="${ind}`
         }
         const idRegex = /(id=")(.*?)(")/gs
-        for (let navPoint of this['ncxNavPointsNonChapters']) {
+        for (let navPoint of this.ncxNavPointsNonChapters) {
             navPoint = ff.processReplacements(navPoint, idRegex, 2, f)
             finalNavPoints.push(navPoint)
         }
-        for (let navPoint of this['ncxNavPoints']) {
+        for (let navPoint of this.ncxNavPoints) {
             navPoint = ff.processReplacements(navPoint, idRegex, 2, f)
             finalNavPoints.push(navPoint)
         }
-        this['ncxNavPoints'] = finalNavPoints
-        this['ncxNavPointsNonChapters'] = []
+        this.ncxNavPoints = finalNavPoints
+        this.ncxNavPointsNonChapters = []
 
-        if (this['opfContentsElement']) {
-            this['opfManifestData'].unshift(this['opfContentsElement'])
-            this['opfContentsElement'] = ''
+        if (this.opfContentsElement) {
+            this.opfManifestData.unshift(this.opfContentsElement)
+            this.opfContentsElement = ''
         }
 
-        if (this['opfNCXElement']) {
+        if (this.opfNCXElement) {
             const fallbackRegex = /(fallback=")(.*?)(")/s
-            let match = fallbackRegex.exec(this['opfNCXElement'])
+            let match = fallbackRegex.exec(this.opfNCXElement)
             if (match) {
-                this['opfNCXElement'] = this['opfNCXElement'].replace(match[0], match[1] + this['opfFallback'] + match[3])
+                this.opfNCXElement = this.opfNCXElement.replace(match[0], match[1] + this.opfFallback + match[3])
             }
-            this['opfManifestData'].unshift(this['opfNCXElement'])
-            this['opfNCXElement'] = ''
+            this.opfManifestData.unshift(this.opfNCXElement)
+            this.opfNCXElement = ''
         }
 
-        if (this['opfSpineContents']) {
-            this['opfSpineNonChapters'].unshift(this['opfSpineContents'])
-            this['opfSpineContents'] = ''
+        if (this.opfSpineContents) {
+            this.opfSpineNonChapters.unshift(this.opfSpineContents)
+            this.opfSpineContents = ''
         }
 
         const finalSpineData = []
-        finalSpineData.push(...this['opfSpineNonChapters'])
-        finalSpineData.push(...this['opfSpineData'])
-        this['opfSpineData'] = finalSpineData
-        this['opfSpineNonChapters'] = []
+        finalSpineData.push(...this.opfSpineNonChapters)
+        finalSpineData.push(...this.opfSpineData)
+        this.opfSpineData = finalSpineData
+        this.opfSpineNonChapters = []
 
         const finalContentsOL1 = []
-        finalContentsOL1.push(...this['contentsOL1NonChapters'])
-        finalContentsOL1.push(...this['contentsOL1Data'])
-        this['contentsOL1Data'] = finalContentsOL1
-        this['contentsOL1NonChapters'] = []
+        finalContentsOL1.push(...this.contentsOL1NonChapters)
+        finalContentsOL1.push(...this.contentsOL1Data)
+        this.contentsOL1Data = finalContentsOL1
+        this.contentsOL1NonChapters = []
     }
 }
 
-function generateFileOptions(fileOptionsJSON) {
-    const fileOptions = JSON.parse(fileOptionsJSON)
-    cleanFileOptions(fileOptions)
-    fileOptions['bodyInd'] = 0
-    fileOptions['fileInds'] = {'xhtml': 0, 'opf': 0, 'ncx': 0}
-    fileOptions['renameHistory'] = {}
-    fileOptions['replacementData'] = replacementData
-    fileOptions['cumulativeData'] = cumulativeData
-    fileOptions['tempInds'] = {'.opf': 0, '.ncx': 0, '.xhtml': 0}
-    fileOptions['uniqueFileLocs'] = {'.opf': '', '.ncx': '', '.xhtml': '', 'xml': ''}
-    fileOptions['fileLocs'] = {}
-    fileOptions['hasIgnore'] = function(name) {
+class FileOptions {
+    constructor(fileOptionsJSON) {
+        const initOptions = JSON.parse(fileOptionsJSON)
+        cleanFileOptions(initOptions)
+        this.chapterFormat = initOptions.chapterFormat
+        this.nonChapterXHTML = initOptions.nonChapterXHTML
+        this.xhtmlNav = initOptions.xhtmlNav
+        this.replacements = initOptions.replacements
+        this.ignoreFile = initOptions.ignoreFile
+        this.outputName = initOptions.outputName
+        this.bodyInd = 0
+        this.fileInds = {'xhtml': 0, 'opf': 0, 'ncx': 0}
+        this.renameHistory = {}
+        this.replacementData = new ReplacementData()
+        this.cumulativeData = new CumulativeData()
+        this.tempInds = {'.opf': 0, '.ncx': 0, '.xhtml': 0}
+        this.uniqueFileLocs = {'.opf': '', '.ncx': '', '.xhtml': '', 'xml': ''}
+        this.fileLocs = {}
+    }
+
+    hasIgnore(name) {
         for (let file of this.ignoreFile) {
             if (file.fileName === name) {
                 return true
@@ -128,7 +144,8 @@ function generateFileOptions(fileOptionsJSON) {
         }
         return false;
     }
-    fileOptions['hasNav'] = function(name) {
+
+    hasNav(name) {
         for (let file of this.xhtmlNav) {
             if (file.format === name) {
                 return true
@@ -136,7 +153,8 @@ function generateFileOptions(fileOptionsJSON) {
         }
         return false
     }
-    fileOptions['hasNonChapterXHTML'] = function(name) {
+
+    hasNonChapterXHTML(name) {
         for (let file of this.nonChapterXHTML) {
             if (file.fileName === name) {
                 return true
@@ -144,7 +162,8 @@ function generateFileOptions(fileOptionsJSON) {
         }
         return false
     }
-    fileOptions['hasChapterFormat'] = function(name) {
+
+    hasChapterFormat(name) {
         name = name.replaceAll(/[0-9]/gi, '')
         for (let file of this.chapterFormat) {
             if (file.format === name) {
@@ -153,7 +172,8 @@ function generateFileOptions(fileOptionsJSON) {
         }
         return false
     }
-    fileOptions['getFileType'] = function(name) {
+
+    getFileType(name) {
         if (this.hasIgnore(name)) {
             return FileType.IGNORE
         } else if (this.hasNav(name)) {
@@ -166,46 +186,50 @@ function generateFileOptions(fileOptionsJSON) {
             return FileType.OTHER
         }
     }
-    fileOptions['generateChapterName'] = function(originalName, parentEpub) {
-        let chaptersInd = this['replacementData']['renameInds']['chaptersInd']
+
+    generateChapterName(originalName, parentEpub) {
+        let chaptersInd = this.replacementData.renameInds.chaptersInd
         let newName = CHAPTER_RENAME + chaptersInd
-        this['replacementData']['renameInds']['chaptersInd'] = chaptersInd + 1
+        this.replacementData.renameInds.chaptersInd = chaptersInd + 1
         let entry = {
             originalName: originalName,
             newName: newName,
             parentEpub: parentEpub
         }
-        this['replacementData']['chapters'].push(entry)
+        this.replacementData.chapters.push(entry)
         return entry
     }
-    fileOptions['generateExclusionName'] = function(originalName, parentEpub) {
-        entry = this['replacementData']['exclusions'][originalName]
+
+    generateExclusionName(originalName, parentEpub) {
+        let entry = this.replacementData.exclusions[originalName]
         if (!entry) {
-            let exclusionsInd = this['replacementData']['renameInds']['exclusionsInd']
+            let exclusionsInd = this.replacementData.renameInds.exclusionsInd
             let newName = EXCLUSION_RENAME + exclusionsInd
-            this['replacementData']['renameInds']['exclusionsInd'] = exclusionsInd + 1
+            this.replacementData.renameInds.exclusionsInd = exclusionsInd + 1
             entry = {
                 originalName: originalName,
                 newName: newName,
                 parentEpub: parentEpub
             }
-            this['replacementData']['exclusions'][originalName] = entry
+            this.replacementData.exclusions[originalName] = entry
         }
         return entry
     }
-    fileOptions['generateOtherName'] = function(originalName, parentEpub) {
-        let othersInd = this['replacementData']['renameInds']['othersInd']
+
+    generateOtherName(originalName, parentEpub) {
+        let othersInd = this.replacementData.renameInds.othersInd
         let newName = OTHER_RENAME + othersInd
-        this['replacementData']['renameInds']['othersInd'] = othersInd + 1
+        this.replacementData.renameInds.othersInd = othersInd + 1
         let entry = {
             originalName: originalName,
             newName: newName,
             parentEpub: parentEpub
         }
-        this['replacementData']['others'].push(entry)
+        this.replacementData.others.push(entry)
         return entry
     }
-    fileOptions['generateNewName'] = function(originalName, parentEpub, type) {
+
+    generateNewName(originalName, parentEpub, type) {
         if (type === FileType.CHAPTER) {
             return this.generateChapterName(originalName, parentEpub)
         } else if (type === FileType.EXCLUSION) {
@@ -217,15 +241,14 @@ function generateFileOptions(fileOptionsJSON) {
             return null
         }
     }
-    fileOptions['getNewNameFormats'] = function() {
+
+    getNewNameFormats() {
         return {
             'chapter': CHAPTER_RENAME,
             'exclusion': EXCLUSION_RENAME,
             'other': OTHER_RENAME
         }
     }
-
-    return fileOptions
 }
 
 /**
@@ -266,4 +289,4 @@ function cleanFileOptions(fileOptions) {
     })
 }
 
-module.exports = {generateFileOptions}
+module.exports = {FileOptions}
