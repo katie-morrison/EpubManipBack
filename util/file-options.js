@@ -9,9 +9,9 @@ const OTHER_RENAME = 'other'
 class ReplacementData {
     constructor() {
         this.renameInds = {
-        'chaptersInd': 1,
-        'othersInd': 1,
-        'exclusionsInd': 1,
+        'chaptersInd': 0,
+        'othersInd': 0,
+        'exclusionsInd': 0,
         }
         this.chapters = []
         this.others = []
